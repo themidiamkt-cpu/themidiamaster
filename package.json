@@ -1,0 +1,18 @@
+{
+  "name": "the-midia-master",
+  "version": "1.0.0",
+  "description": "Sistema interno da agência The Mídia Marketing",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.0"
+  },
+  "devDependencies": {
+    "vite": "^5.4.0"
+  }
+}

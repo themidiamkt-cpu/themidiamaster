@@ -1,0 +1,4355 @@
+import { ensureSession, isSupabaseConfigured, supabase } from './supabase.js';
+import { clienteService } from './services/clienteService.js';
+import { leadCrmService } from './services/leadCrmService.js';
+import { campanhaService } from './services/campanhaService.js';
+import { relatorioService } from './services/relatorioService.js';
+import { tarefaService } from './services/tarefaService.js';
+import { onboardingService } from './services/onboardingService.js';
+import { ativoClienteService } from './services/ativoClienteService.js';
+import { observacaoClienteService } from './services/observacaoClienteService.js';
+import { equipeService } from './services/equipeService.js';
+import { diarioBordoService } from './services/diarioBordoService.js';
+import { alertaAnomaliaService } from './services/alertaAnomaliaService.js';
+import { metaClienteService } from './services/metaClienteService.js';
+import { confirmDelete, date, emptyState, escapeHtml, label, loadingState, money, number, pageHeader, renderLucide, statCard, statusBadge, toast } from './components/ui.js';
+
+const app = document.getElementById('app');
+const modalBackdrop = document.getElementById('modalBackdrop');
+const modalForm = document.getElementById('modalForm');
+const modalTitle = document.getElementById('modalTitle');
+const modalEyebrow = document.getElementById('modalEyebrow');
+const initialMetaDateRange = getDefaultDateRange();
+const fixedMetaAccessToken = 'EAAKJkRH2esoBRc0EFaZAkKc3TrzQZC6YZCmWP0tj4b7EdZBAaXL9NZCFtMUypWqZBjzMVRyOyzwh3ItVTs8bgyl16uFcIiWvDHB8GjxxcPWji6FC3NwTqqvnlrZBE3dFG2ZA7eNZBLGbtZCQHDZBx0SZAyHIS1dcSSPtQJNKuLmWC9JtmWhsCLOZCD3uZBAdmuZCEZA0rYzvCgZDZD';
+const fixedGoogleMapsApiKey = 'AIzaSyAyH7teIp1Xjprln7TaA1i_dIY8TB0_HgE';
+const whatsappWebhookUrl = 'https://automacao2.themidiamarketing.com.br/webhook/conectar-cliente';
+const mainAdminEmail = 'themidiamkt@gmail.com';
+const adminViews = ['dashboard', 'clientes', 'relatorios', 'crm', 'metaAds', 'gbp', 'diario', 'tarefas', 'equipe', 'metas', 'alertas', 'config'];
+const teamViews = ['relatorios', 'metaAds', 'gbp', 'diario', 'tarefas'];
+let googlePlacesLoader = null;
+let googlePlacesMap = null;
+
+const state = {
+  view: 'dashboard',
+  taskDetailId: null,
+  clientes: [],
+  leads: [],
+  campanhas: [],
+  relatorios: [],
+  tarefas: [],
+  diarios: [],
+  diarioMissingTable: false,
+  equipe: [],
+  metas: [],
+  metaRowDrafts: {},
+  alertas: [],
+  alertasMissingTable: false,
+  alertasFiltroStatus: 'ativo',
+  alertasFiltroSeveridade: 'all',
+  detailClienteId: null,
+  detailRelatorioId: null,
+  detailTab: 'visao',
+  diarioSelectedClienteId: null,
+  diarioDate: isoDate(new Date()),
+  session: null,
+  loadError: '',
+  lastSavedRelatorioId: null,
+  clientMetaCosts: {
+    loading: false,
+    loaded: false,
+    error: '',
+    byClienteId: {},
+  },
+  metaAds: {
+    token: fixedMetaAccessToken,
+    since: initialMetaDateRange.since,
+    until: initialMetaDateRange.until,
+    clienteId: '',
+    goal: 'mensagens',
+    tableMode: 'weekly',
+    loading: false,
+    error: '',
+    report: null,
+    viewMode: 'cards',
+  },
+  gbp: {
+    clienteId: '',
+    businessQuery: '',
+    keyword: '',
+    radiusKm: 3,
+    gridSize: 5,
+    searchCenter: '',
+    searchRadiusMeters: '',
+    loading: false,
+    error: '',
+    report: null,
+  },
+  googleAds: {
+    loading: false,
+    error: '',
+    report: null,
+  },
+  whatsapp: getStoredWhatsAppConfig(),
+};
+
+const crmStages = ['lead_novo', 'contato_feito', 'respondeu', 'reuniao_marcada', 'proposta_enviada', 'follow_up', 'fechado', 'perdido'];
+const onboardingFields = ['contrato_assinado', 'briefing_preenchido', 'acesso_business_manager', 'acesso_instagram', 'acesso_google_ads', 'pixel_configurado', 'dominio_verificado', 'whatsapp_conectado', 'crm_configurado', 'primeira_campanha_criada', 'primeira_reuniao_realizada'];
+const legacyMetaAdsClients = [
+  { nome_empresa: 'Zin Bar', meta_ads_act: 'act_712213988136898', segmento: 'Restaurante', status: 'ativo', plano_contratado: 'personalizado', observacoes: 'Objetivo Meta Ads: mensagens.' },
+  { nome_empresa: 'Garden Bar', meta_ads_act: 'act_4377679522276466', segmento: 'Restaurante', status: 'ativo', plano_contratado: 'personalizado', observacoes: 'Objetivo Meta Ads: mensagens.' },
+  { nome_empresa: 'Mimagi Kids', meta_ads_act: 'act_1408009703942299', segmento: 'Infantil', status: 'ativo', plano_contratado: 'personalizado', observacoes: 'Objetivo Meta Ads: mensagens.' },
+  { nome_empresa: 'NV Store', meta_ads_act: 'act_3507325512866320', segmento: 'E-commerce', status: 'ativo', plano_contratado: 'personalizado', observacoes: 'Objetivo Meta Ads: vendas.' },
+  { nome_empresa: 'Trokai', meta_ads_act: 'act_1098617837158131', segmento: 'E-commerce', status: 'ativo', plano_contratado: 'personalizado', observacoes: 'Objetivo Meta Ads: vendas.' },
+  { nome_empresa: 'Audrei', meta_ads_act: 'act_1077580320653450', segmento: 'Servicos', status: 'ativo', plano_contratado: 'personalizado', observacoes: 'Objetivo Meta Ads: mensagens.' },
+  { nome_empresa: 'The Midia', meta_ads_act: 'act_1590429088125895', segmento: 'Agencia', status: 'ativo', plano_contratado: 'personalizado', observacoes: 'Objetivo Meta Ads: leads.' },
+];
+const metaGoalConfig = {
+  mensagens: {
+    label: 'Mensagens',
+    metricLabel: 'Mensagens',
+    costLabel: 'Custo/mensagem',
+    shortCostLabel: 'R$/MSG',
+    actionTypes: ['onsite_conversion.messaging_conversation_started_7d', 'messaging_conversation_started_7d', 'messenger_conversation_started_7d'],
+  },
+  vendas: {
+    label: 'Vendas',
+    metricLabel: 'Vendas',
+    costLabel: 'Custo/venda',
+    shortCostLabel: 'R$/VENDA',
+    actionTypes: ['omni_purchase', 'purchase', 'offsite_conversion.fb_pixel_purchase'],
+  },
+  leads: {
+    label: 'Leads',
+    metricLabel: 'Leads',
+    costLabel: 'Custo/lead',
+    shortCostLabel: 'R$/LEAD',
+    actionTypes: ['lead', 'onsite_conversion.lead_grouped', 'offsite_conversion.fb_pixel_lead'],
+  },
+  seguidores: {
+    label: 'Seguidores',
+    metricLabel: 'Seguidores no Instagram',
+    costLabel: 'Custo/seguidor',
+    shortCostLabel: 'R$/SEG.',
+    actionTypes: ['instagram_profile_follow', 'onsite_conversion.follow', 'follow', 'page_fan_adds'],
+  },
+};
+
+const services = {
+  clientes: clienteService,
+  crm: leadCrmService,
+  campanhas: campanhaService,
+  relatorios: relatorioService,
+  tarefas: tarefaService,
+  diario: diarioBordoService,
+  equipe: equipeService,
+};
+
+let initialized = false;
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', init, { once: true });
+} else {
+  init();
+}
+document.addEventListener('click', handleNavActivation, true);
+document.addEventListener('pointerdown', handleNavActivation, true);
+document.getElementById('mobileToggle')?.addEventListener('click', () => document.getElementById('sidebar')?.classList.toggle('open'));
+document.getElementById('logoutButton')?.addEventListener('click', logout);
+document.getElementById('modalClose')?.addEventListener('click', closeModal);
+modalBackdrop?.addEventListener('click', (event) => {
+  if (event.target === modalBackdrop) closeModal();
+});
+
+async function init() {
+  if (initialized) return;
+  initialized = true;
+  await loadAll();
+  render();
+}
+
+function handleNavActivation(event) {
+  const item = event.target.closest?.('.nav-item[data-view]');
+  if (!item || item.disabled || item.hidden) return;
+  event.preventDefault();
+  event.stopPropagation();
+  navigate(item.dataset.view);
+}
+
+async function loadAll() {
+  app.innerHTML = loadingState('Sincronizando com Supabase...');
+  renderLucide();
+  state.loadError = '';
+  if (!isSupabaseConfigured) {
+    render();
+    return;
+  }
+
+  try {
+    state.session = await withTimeout(
+      ensureSession(),
+      8000,
+      'Nao foi possivel confirmar a sessao no Supabase. Verifique a conexao e tente atualizar.'
+    );
+    if (!state.session) {
+      render();
+      return;
+    }
+
+    if (!canAccessView(state.view)) state.view = getDefaultView();
+
+    if (isMainAdmin()) {
+      const [clientes, leads, campanhas, relatorios, tarefas, diarios, equipe, alertas, metas] = await withTimeout(Promise.all([
+        clienteService.list({ order: 'nome_empresa', ascending: true }),
+        leadCrmService.list(),
+        campanhaService.list({ columns: '*, clientes(nome_empresa, meta_ads_act)' }),
+        relatorioService.list({ columns: '*, clientes(nome_empresa, meta_ads_act)' }),
+        tarefaService.list({ columns: '*, clientes(nome_empresa)' }),
+        safeDiaryList(),
+        equipeService.list({ order: 'nome', ascending: true }),
+        safeAlertasList(),
+        safeList(() => metaClienteService.listAll()),
+      ]), 12000, 'O Supabase demorou para carregar os dados. Mostrando o painel em modo vazio ate atualizar.');
+      Object.assign(state, { clientes, leads, campanhas, relatorios, tarefas, diarios, equipe, alertas, metas });
+      updateAlertasBadge();
+      return;
+    }
+
+    const [clientes, relatorios, tarefas, diarios] = await withTimeout(Promise.all([
+      clienteService.list({ order: 'nome_empresa', ascending: true }),
+      relatorioService.list({ columns: '*, clientes(nome_empresa, meta_ads_act)' }),
+      tarefaService.list({ columns: '*, clientes(nome_empresa)' }),
+      safeDiaryList(),
+    ]), 12000, 'O Supabase demorou para carregar os dados. Mostrando o painel em modo vazio ate atualizar.');
+    Object.assign(state, { clientes, leads: [], campanhas: [], relatorios, tarefas, diarios, equipe: [] });
+  } catch (error) {
+    state.loadError = error.message || 'Nao foi possivel carregar os dados do Supabase.';
+    showError(error);
+  }
+}
+
+async function safeList(loader) {
+  try {
+    return await loader();
+  } catch (error) {
+    if (['42P01', 'PGRST205'].includes(error.code)) return [];
+    throw error;
+  }
+}
+
+async function safeAlertasList() {
+  try {
+    const alertas = await alertaAnomaliaService.listAll();
+    state.alertasMissingTable = false;
+    return alertas;
+  } catch (error) {
+    if (['42P01', 'PGRST205'].includes(error?.code) || String(error?.message || '').includes('alertas_anomalia')) {
+      state.alertasMissingTable = true;
+      return [];
+    }
+    throw error;
+  }
+}
+
+function updateAlertasBadge() {
+  const badge = document.getElementById('alertasBadge');
+  if (!badge) return;
+  const ativos = state.alertas.filter((a) => a.status === 'ativo').length;
+  if (ativos > 0) {
+    badge.textContent = ativos;
+    badge.hidden = false;
+  } else {
+    badge.hidden = true;
+  }
+}
+
+async function safeDiaryList() {
+  try {
+    const diarios = await diarioBordoService.list({ columns: '*, clientes(nome_empresa)' });
+    state.diarioMissingTable = false;
+    return diarios;
+  } catch (error) {
+    if (isMissingDiaryTableError(error)) {
+      state.diarioMissingTable = true;
+      return [];
+    }
+    throw error;
+  }
+}
+
+function isMissingDiaryTableError(error) {
+  return ['42P01', 'PGRST205'].includes(error?.code) || String(error?.message || '').includes('diario_bordo');
+}
+
+function isMainAdmin() {
+  return state.session?.user?.email?.toLowerCase() === mainAdminEmail;
+}
+
+function getAllowedViews() {
+  return isMainAdmin() ? adminViews : teamViews;
+}
+
+function getDefaultView() {
+  return isMainAdmin() ? 'dashboard' : 'relatorios';
+}
+
+function canAccessView(view) {
+  return getAllowedViews().includes(view);
+}
+
+function applyNavPermissions() {
+  const allowed = getAllowedViews();
+  document.querySelectorAll('.nav-item[data-view]').forEach((item) => {
+    const permitted = allowed.includes(item.dataset.view);
+    item.hidden = !permitted;
+    item.disabled = !permitted;
+    item.classList.toggle('active', permitted && item.dataset.view === state.view);
+  });
+}
+
+function navigate(view) {
+  if (!canAccessView(view)) {
+    state.view = getDefaultView();
+  } else {
+    state.view = view;
+  }
+  state.detailClienteId = null;
+  state.detailRelatorioId = null;
+  applyNavPermissions();
+  document.getElementById('sidebar')?.classList.remove('open');
+  render();
+}
+
+function render() {
+  if (!isSupabaseConfigured) {
+    document.body.classList.remove('auth-only');
+    app.innerHTML = renderConfig();
+    bindGlobalActions();
+    renderLucide();
+    return;
+  }
+
+  if (!state.session) {
+    document.body.classList.add('auth-only');
+    app.innerHTML = renderLogin();
+    bindLogin();
+    renderLucide();
+    return;
+  }
+
+  document.body.classList.remove('auth-only');
+  if (!canAccessView(state.view)) state.view = getDefaultView();
+  applyNavPermissions();
+  if (!isMainAdmin() && state.detailClienteId) {
+    state.detailClienteId = null;
+    state.view = getDefaultView();
+  }
+  if (state.detailClienteId) {
+    renderClienteDetail(state.detailClienteId);
+    return;
+  }
+  if (state.detailRelatorioId) {
+    renderRelatorioDetail(state.detailRelatorioId);
+    return;
+  }
+
+  const views = {
+    dashboard: renderDashboard,
+    clientes: renderClientes,
+    crm: renderCrm,
+    campanhas: renderCampanhas,
+    relatorios: renderRelatorios,
+    metaAds: renderMetaAds,
+    gbp: renderGbp,
+    diario: renderDiario,
+    tarefas: renderTarefas,
+    equipe: renderEquipe,
+    metas: renderMetas,
+    alertas: renderAlertas,
+    config: renderConfig,
+  };
+  app.innerHTML = `${renderLoadErrorBanner()}${views[state.view]?.() || renderDashboard()}`;
+  bindGlobalActions();
+  renderLucide();
+}
+
+function renderLogin() {
+  return `
+    <section class="login-screen">
+      <div class="login-card">
+        <div class="login-brand">
+          <div class="brand-mark login-mark">TM</div>
+          <div>
+            <p class="eyebrow">Acesso interno</p>
+            <h1>The Midia Master</h1>
+            <span>Entre para gerenciar clientes, campanhas, CRM e operacao.</span>
+          </div>
+        </div>
+        ${state.loadError ? `<div class="state"><strong>Conexao instavel</strong><span>${escapeHtml(state.loadError)}</span></div>` : ''}
+        <form id="loginForm" class="form-grid">
+          <label class="full">Email<input class="input" type="email" name="email" required autocomplete="email"></label>
+          <label class="full">Senha<input class="input" type="password" name="password" required autocomplete="current-password"></label>
+          <div class="form-actions"><button class="button login-button" type="submit"><i data-lucide="log-in"></i>Entrar</button></div>
+        </form>
+      </div>
+    </section>
+  `;
+}
+
+function renderLoadErrorBanner() {
+  if (!state.loadError) return '';
+  return `
+    <section class="panel">
+      <div class="panel-header">
+        <div>
+          <h2>Dados nao carregados</h2>
+          <p class="muted">${escapeHtml(state.loadError)}</p>
+        </div>
+        <button class="button" data-action="refresh" type="button"><i data-lucide="refresh-cw"></i>Tentar novamente</button>
+      </div>
+    </section>
+  `;
+}
+
+function bindLogin() {
+  document.getElementById('loginForm')?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const payload = Object.fromEntries(new FormData(event.target).entries());
+    try {
+      const { error } = await supabase.auth.signInWithPassword(payload);
+      if (error) throw error;
+      await loadAll();
+      render();
+      toast('Acesso liberado.');
+    } catch (error) {
+      showError(error);
+    }
+  });
+}
+
+async function logout() {
+  await supabase.auth.signOut();
+  state.session = null;
+  render();
+}
+
+function renderConfig() {
+  const whatsapp = state.whatsapp;
+  return `
+    ${pageHeader('Configuracoes', 'Conexao e estado do projeto.')}
+    <section class="panel config-ok">
+      <div class="panel-header">
+        <h2>Supabase conectado</h2>
+        ${statusBadge('ativo')}
+      </div>
+      <div class="kv">
+        ${areaSummary('Projeto', 'wkjnxohfggqwhemalelf')}
+        ${areaSummary('URL', 'https://wkjnxohfggqwhemalelf.supabase.co')}
+        ${areaSummary('Usuario autenticado', state.session?.user?.email || 'Sessao ativa')}
+        ${areaSummary('Clientes', `${state.clientes.length} registros`)}
+        ${areaSummary('Leads CRM', `${state.leads.length} registros`)}
+        ${areaSummary('Campanhas', `${state.campanhas.length} registros`)}
+        ${areaSummary('Relatorios', `${state.relatorios.length} registros`)}
+        ${areaSummary('Tarefas', `${state.tarefas.length} registros`)}
+      </div>
+      <p class="muted">A migration foi executada no Supabase e o painel esta usando dados reais do banco. A chave service_role nao foi salva no frontend.</p>
+    </section>
+    <section class="panel whatsapp-panel">
+      <div class="panel-header">
+        <div>
+          <h2>Conexao WhatsApp</h2>
+          <p class="muted">Integração via Evolution API usando o mesmo webhook do projeto restaurante.</p>
+        </div>
+        ${statusBadge(whatsapp.status || 'pendente')}
+      </div>
+      <div class="whatsapp-config-grid">
+        <div class="whatsapp-config-form">
+          <label>Nome da instancia
+            <input class="input" data-action="whatsapp-instance" value="${escapeHtml(whatsapp.instanceName)}" placeholder="the-midia-master">
+          </label>
+          <label>Webhook de conexao
+            <input class="input" value="${escapeHtml(whatsappWebhookUrl)}" readonly>
+          </label>
+          <div class="whatsapp-actions">
+            <button class="button" data-action="whatsapp-connect" type="button"><i data-lucide="qr-code"></i>Criar QR Code</button>
+            <button class="secondary-button" data-action="whatsapp-mark-connected" type="button"><i data-lucide="check-circle-2"></i>Marcar conectado</button>
+            <button class="secondary-button" data-action="whatsapp-clear" type="button"><i data-lucide="unlink"></i>Limpar conexao</button>
+          </div>
+          <div class="whatsapp-status-box">
+            ${areaSummary('Status', label(whatsapp.status || 'pendente'))}
+            ${areaSummary('Instancia', whatsapp.instanceName || '-')}
+            ${areaSummary('Ultima atualizacao', whatsapp.updatedAt ? new Date(whatsapp.updatedAt).toLocaleString('pt-BR') : '-')}
+          </div>
+          ${whatsapp.message ? `<p class="whatsapp-message">${escapeHtml(whatsapp.message)}</p>` : ''}
+        </div>
+        <div class="whatsapp-qr-card" id="whatsappQrContainer">
+          ${renderWhatsappQr(whatsapp)}
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function getDefaultWhatsappConfig() {
+  return {
+    instanceName: 'the-midia-master',
+    status: 'pendente',
+    qrCode: '',
+    message: '',
+    updatedAt: '',
+  };
+}
+
+function getStoredWhatsAppConfig() {
+  try {
+    const saved = JSON.parse(localStorage.getItem('theMidiaMaster.whatsapp') || '{}');
+    return { ...getDefaultWhatsappConfig(), ...saved };
+  } catch {
+    return getDefaultWhatsappConfig();
+  }
+}
+
+function persistWhatsappConfig() {
+  localStorage.setItem('theMidiaMaster.whatsapp', JSON.stringify(state.whatsapp));
+}
+
+function sanitizeInstanceName(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+}
+
+function renderWhatsappQr(config) {
+  if (config.status === 'conectando') {
+    return `<div class="state state-loading"><span class="spinner"></span><strong>Gerando QR Code</strong><span>Enviando solicitacao para o webhook.</span></div>`;
+  }
+  if (config.qrCode) {
+    return `
+      <div class="whatsapp-qr-result">
+        <img src="${escapeHtml(config.qrCode)}" alt="QR Code WhatsApp">
+        <strong>Escaneie com o WhatsApp</strong>
+        <span>Abra o WhatsApp no celular e conecte como no WhatsApp Web.</span>
+      </div>
+    `;
+  }
+  if (config.status === 'ativo') {
+    return `<div class="whatsapp-connected"><strong>WhatsApp conectado</strong><span>A instancia esta marcada como ativa neste painel.</span></div>`;
+  }
+  return `<div class="whatsapp-empty"><strong>Aguardando QR Code</strong><span>Clique em Criar QR Code para iniciar a conexao.</span></div>`;
+}
+
+async function connectWhatsapp() {
+  const instanceName = sanitizeInstanceName(state.whatsapp.instanceName || 'the-midia-master');
+  if (!instanceName) {
+    toast('Informe um nome de instancia valido.', 'error');
+    return;
+  }
+
+  state.whatsapp = {
+    ...state.whatsapp,
+    instanceName,
+    status: 'conectando',
+    message: '',
+    qrCode: '',
+    updatedAt: new Date().toISOString(),
+  };
+  persistWhatsappConfig();
+  render();
+
+  try {
+    const response = await fetch(whatsappWebhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        instanceName,
+        restaurante_id: 'the-midia-master',
+        restauranteId: 'the-midia-master',
+        projeto: 'the-midia-master',
+        origem: 'the-midia-master-configuracoes',
+        timestamp: new Date().toISOString(),
+      }),
+    });
+
+    if (!response.ok) throw new Error('Erro ao conectar com o servico de automacao.');
+
+    const contentType = response.headers.get('content-type') || '';
+    let payload;
+    if (contentType.includes('application/json')) {
+      payload = await response.json();
+    } else {
+      const blob = await response.blob();
+      payload = { qrcode: { base64: await blobToDataUrl(blob) } };
+    }
+
+    const qrCode = extractWhatsappQr(payload);
+    state.whatsapp = {
+      ...state.whatsapp,
+      status: qrCode ? 'pendente' : 'ativo',
+      qrCode,
+      message: qrCode ? 'QR Code gerado.' : 'Solicitacao enviada. O webhook nao retornou imagem de QR Code.',
+      updatedAt: new Date().toISOString(),
+    };
+    persistWhatsappConfig();
+    render();
+    toast(qrCode ? 'QR Code gerado.' : 'Solicitacao enviada ao WhatsApp.');
+  } catch (error) {
+    state.whatsapp = {
+      ...state.whatsapp,
+      status: 'pendente',
+      message: error.message || 'Falha ao conectar WhatsApp.',
+      updatedAt: new Date().toISOString(),
+    };
+    persistWhatsappConfig();
+    render();
+    showError(error);
+  }
+}
+
+function extractWhatsappQr(payload) {
+  if (!payload) return '';
+  const candidates = [
+    payload.qrcode?.base64,
+    payload.qrcode?.code,
+    payload.qrCode?.base64,
+    payload.qrCode,
+    payload.qr,
+    payload.base64,
+    payload.image,
+  ].filter(Boolean);
+  const raw = String(candidates[0] || '');
+  if (!raw) return '';
+  return raw.startsWith('data:') ? raw : `data:image/png;base64,${raw}`;
+}
+
+function blobToDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
+function renderDashboard() {
+  const active = state.clientes.filter((c) => c.status === 'ativo');
+  const paused = state.clientes.filter((c) => c.status === 'pausado');
+  const canceled = state.clientes.filter((c) => c.status === 'cancelado');
+  const prospects = state.clientes.filter((c) => c.status === 'prospect');
+  const monthlyRevenue = active.reduce((sum, c) => sum + Number(c.valor_mensal || 0), 0);
+  const managedBudget = active.reduce((sum, c) => sum + Number(c.verba_mensal_trafego || 0), 0);
+  const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+  const leadsMonth = state.relatorios.filter((r) => new Date(r.periodo_fim) >= monthStart).reduce((sum, r) => sum + Number(r.leads || 0), 0);
+  const crmTotal = state.leads.length;
+  const crmContacted = state.leads.filter((lead) => ['contato_feito', 'respondeu', 'reuniao_marcada', 'proposta_enviada', 'follow_up', 'fechado', 'perdido'].includes(lead.etapa)).length;
+  const crmMeetings = state.leads.filter((lead) => ['reuniao_marcada', 'proposta_enviada', 'follow_up', 'fechado'].includes(lead.etapa)).length;
+  const crmProposals = state.leads.filter((lead) => ['proposta_enviada', 'follow_up', 'fechado'].includes(lead.etapa)).length;
+  const crmClosed = state.leads.filter((lead) => lead.etapa === 'fechado').length;
+  const crmLost = state.leads.filter((lead) => lead.etapa === 'perdido').length;
+  const contactRate = percent(crmContacted, crmTotal);
+  const meetingRate = percent(crmMeetings, crmTotal);
+  const meetingFromContactRate = percent(crmMeetings, crmContacted);
+  const proposalRate = percent(crmProposals, crmMeetings);
+  const closeRate = percent(crmClosed, crmTotal);
+  const closeFromProposalRate = percent(crmClosed, crmProposals);
+  const pendingTasks = state.tarefas.filter((t) => ['pendente', 'em_andamento'].includes(t.status)).length;
+  const overdueTasks = getOverdueTasks();
+  const staleReports = state.clientes.filter((cliente) => !state.relatorios.some((r) => r.cliente_id === cliente.id && daysSince(r.periodo_fim) <= 35)).length;
+  const followups = state.leads.filter((lead) => lead.data_proximo_contato).sort((a, b) => String(a.data_proximo_contato).localeCompare(String(b.data_proximo_contato))).slice(0, 5);
+
+  return `
+    ${pageHeader('Dashboard geral da agencia', 'Indicadores reais consolidados a partir do Supabase.', `<button class="button" data-action="refresh"><i data-lucide="refresh-cw"></i>Atualizar</button>`)}
+    <section class="dashboard-area">
+      <div class="dashboard-area-header">
+        <div>
+          <span>Carteira</span>
+          <h2>Clientes</h2>
+        </div>
+        <p>${active.length} ativos de ${state.clientes.length} cadastrados</p>
+      </div>
+      <div class="stats-grid compact">
+        ${statCard('Clientes ativos', active.length, 'building-2', 'green')}
+        ${statCard('Clientes pausados', paused.length, 'pause-circle', 'yellow')}
+        ${statCard('Clientes cancelados', canceled.length, 'x-circle', 'red')}
+        ${statCard('Prospects', prospects.length, 'radar', 'blue')}
+      </div>
+    </section>
+    <section class="dashboard-area">
+      <div class="dashboard-area-header">
+        <div>
+          <span>Receita e midia</span>
+          <h2>Financeiro</h2>
+        </div>
+        <p>Contratos ativos e verba sob gestao</p>
+      </div>
+      <div class="stats-grid compact">
+        ${statCard('Faturamento mensal', money(monthlyRevenue), 'wallet', 'gold')}
+        ${statCard('Verba gerenciada', money(managedBudget), 'circle-dollar-sign', 'blue')}
+        ${statCard('Leads gerados no mes', leadsMonth, 'mouse-pointer-click', 'green')}
+        ${statCard('Relatorios lancados', state.relatorios.length, 'file-bar-chart', 'blue')}
+      </div>
+    </section>
+    <section class="dashboard-area dashboard-area-featured">
+      <div class="dashboard-area-header">
+        <div>
+          <span>Leads > reunioes > fechamentos</span>
+          <h2>Funil comercial</h2>
+        </div>
+        <p>${crmTotal} leads no funil, ${crmClosed} fechados</p>
+      </div>
+      <div class="funnel-flow">
+        ${funnelStageCard('Leads no funil', crmTotal, 'blue')}
+        ${funnelConnector(contactRate, 'lead > contato')}
+        ${funnelStageCard('Contato feito', crmContacted, 'blue')}
+        ${funnelConnector(meetingFromContactRate, 'contato > reuniao')}
+        ${funnelStageCard('Reunioes marcadas', crmMeetings, 'gold')}
+        ${funnelConnector(proposalRate, 'reuniao > proposta')}
+        ${funnelStageCard('Propostas enviadas', crmProposals, 'yellow')}
+        ${funnelConnector(closeFromProposalRate, 'proposta > fechado')}
+        ${funnelStageCard('Fechamentos', crmClosed, 'green')}
+      </div>
+      <div class="funnel-secondary">
+        ${funnelStageCard('Perdidos', crmLost, 'red')}
+        ${funnelStageCard('Taxa fechamento geral', closeRate, 'gold')}
+        ${funnelStageCard('Lead > reuniao', meetingRate, 'blue')}
+      </div>
+    </section>
+    <section class="dashboard-area">
+      <div class="dashboard-area-header">
+        <div>
+          <span>Rotina interna</span>
+          <h2>Operacao</h2>
+        </div>
+        <p>Tarefas, alertas e follow-ups comerciais</p>
+      </div>
+      <div class="stats-grid compact">
+        ${statCard('Tarefas pendentes', pendingTasks, 'list-checks', 'yellow')}
+        ${statCard('Tarefas vencidas', overdueTasks.length, 'alarm-clock', 'red')}
+        ${statCard('Sem relatorio atualizado', staleReports, 'file-warning', 'red')}
+        ${statCard('Follow-ups comerciais', followups.length, 'phone-forwarded', 'gold')}
+      </div>
+    </section>
+    <section class="grid-2">
+      <div class="panel">
+        <div class="panel-header"><h3>Resumo por area</h3></div>
+        <div class="kv">
+          ${areaSummary('Clientes', `${active.length} ativos de ${state.clientes.length}`)}
+          ${areaSummary('Financeiro', `${money(monthlyRevenue)} em contratos`)}
+          ${areaSummary('Funil comercial', `${crmTotal} leads > ${crmMeetings} reunioes > ${crmClosed} fechamentos`)}
+          ${areaSummary('Conversao geral', closeRate)}
+          ${areaSummary('Contato feito', `${crmContacted} leads (${percent(crmContacted, crmTotal)})`)}
+          ${areaSummary('Perdidos', `${crmLost} leads`)}
+          ${areaSummary('Tarefas', `${pendingTasks} abertas`)}
+          ${areaSummary('Relatorios', `${state.relatorios.length} lancados`)}
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-header"><h3>Alertas importantes</h3></div>
+        ${renderAlertList(overdueTasks, followups, staleReports)}
+      </div>
+    </section>
+  `;
+}
+
+function areaSummary(title, value) {
+  return `<div><span>${escapeHtml(title)}</span><strong>${escapeHtml(value)}</strong></div>`;
+}
+
+function funnelStageCard(labelText, value, tone = 'blue') {
+  return `
+    <article class="funnel-stage tone-${tone}">
+      <strong>${escapeHtml(value)}</strong>
+      <span>${escapeHtml(labelText)}</span>
+    </article>
+  `;
+}
+
+function funnelConnector(value, labelText) {
+  return `
+    <div class="funnel-connector">
+      <strong>${escapeHtml(value)}</strong>
+      <span>${escapeHtml(labelText)}</span>
+    </div>
+  `;
+}
+
+function percent(part, total) {
+  return total ? `${((Number(part || 0) / Number(total || 0)) * 100).toFixed(1)}%` : '0.0%';
+}
+
+function renderAlertList(overdueTasks, followups, staleReports) {
+  const items = [
+    overdueTasks.length ? `${overdueTasks.length} tarefas vencidas precisam de atencao.` : null,
+    staleReports ? `${staleReports} clientes estao sem relatorio atualizado nos ultimos 35 dias.` : null,
+    followups.length ? `${followups.length} proximos follow-ups comerciais registrados.` : null,
+  ].filter(Boolean);
+  if (!items.length) return emptyState('Sem alertas criticos', 'Operacao sem pendencias principais agora.');
+  return `<div class="table-wrap"><table><tbody>${items.map((item) => `<tr><td>${escapeHtml(item)}</td></tr>`).join('')}</tbody></table></div>`;
+}
+
+function renderClientes() {
+  scheduleClientMetaCostLoad();
+  return `
+    ${pageHeader('Clientes', 'Cadastro completo dos clientes da agencia.', `<button class="secondary-button" data-action="refresh-client-meta-costs"><i data-lucide="refresh-cw"></i>Custo 7d Meta</button><button class="secondary-button" data-action="export" data-entity="clientes"><i data-lucide="download"></i>CSV</button><button class="button" data-action="new" data-entity="clientes"><i data-lucide="plus"></i>Novo cliente</button>`)}
+    ${state.clientMetaCosts.error ? `<div class="state"><strong>Meta Ads</strong><span>${escapeHtml(state.clientMetaCosts.error)}</span></div>` : ''}
+    ${renderTablePanel('clientes', ['Empresa', 'Status', 'Plano', 'Mensalidade', 'Custo resultado 7d', 'Meta Ads', 'Responsavel', ''], state.clientes.map((cliente) => `
+      <tr>
+        <td><strong>${escapeHtml(cliente.nome_empresa)}</strong><span class="muted">${escapeHtml(cliente.segmento || cliente.cidade || '')}</span></td>
+        <td>${statusBadge(cliente.status)}</td>
+        <td>${statusBadge(cliente.plano_contratado || 'personalizado')}</td>
+        <td>${money(cliente.valor_mensal)}</td>
+        <td>${renderClientMetaCost(cliente)}</td>
+        <td>${escapeHtml(cliente.meta_ads_act || '-')}</td>
+        <td>${escapeHtml(cliente.responsavel_interno || cliente.responsavel || '-')}</td>
+        <td class="row-actions">
+          <button class="ghost-button" data-action="detail-cliente" data-id="${cliente.id}"><i data-lucide="panel-right-open"></i>Abrir</button>
+          <button class="icon-button" data-action="edit" data-entity="clientes" data-id="${cliente.id}" aria-label="Editar"><i data-lucide="pencil"></i></button>
+          <button class="icon-button" data-action="delete" data-entity="clientes" data-id="${cliente.id}" aria-label="Excluir"><i data-lucide="trash-2"></i></button>
+        </td>
+      </tr>`).join(''))}
+  `;
+}
+
+function renderClientMetaCost(cliente) {
+  if (!cliente.meta_ads_act) return '<span class="muted">Sem conta Meta</span>';
+  const cost = state.clientMetaCosts.byClienteId[cliente.id];
+  const goalKey = getClientMetaGoalKey(cliente);
+  const goal = metaGoalConfig[goalKey] || metaGoalConfig.mensagens;
+  if (state.clientMetaCosts.loading && !cost) {
+    return '<span class="muted">Carregando...</span>';
+  }
+  if (cost?.error) {
+    return `<span class="muted">Erro</span><span class="muted" style="font-size:11px;display:block">${escapeHtml(cost.error)}</span>`;
+  }
+  if (!cost) {
+    return `<span class="muted">${state.clientMetaCosts.loaded ? 'Sem dados' : 'Aguardando'}</span><span class="muted" style="font-size:11px;display:block">${escapeHtml(goal.metricLabel)} 7d</span>`;
+  }
+  return `
+    <strong>${cost.resultados ? money(cost.custo) : '-'}</strong>
+    <span class="muted" style="font-size:11px;display:block">${escapeHtml(cost.label)}: ${number(cost.resultados)} | ${money(cost.investimento)}</span>
+  `;
+}
+
+function getClientMetaGoalKey(cliente) {
+  const activeGoals = state.metas
+    .filter((meta) => meta.cliente_id === cliente.id && meta.ativo !== false)
+    .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+  return activeGoals[0]?.objetivo || inferMetaGoal(cliente);
+}
+
+function scheduleClientMetaCostLoad(force = false) {
+  if (!isMainAdmin()) return;
+  if (!force && (state.clientMetaCosts.loading || state.clientMetaCosts.loaded)) return;
+  if (!state.clientes.some((cliente) => cliente.meta_ads_act)) return;
+  setTimeout(() => loadClientMetaCosts(force), 0);
+}
+
+async function loadClientMetaCosts(force = false) {
+  if (state.clientMetaCosts.loading) return;
+  if (!force && state.clientMetaCosts.loaded) return;
+  state.clientMetaCosts = { ...state.clientMetaCosts, loading: true, error: '' };
+  render();
+  try {
+    const range = getDefaultDateRange();
+    const clientes = state.clientes.filter((cliente) => cliente.meta_ads_act);
+    const entries = await Promise.all(clientes.map(async (cliente) => {
+      try {
+        const goalKey = getClientMetaGoalKey(cliente);
+        const goal = metaGoalConfig[goalKey] || metaGoalConfig.mensagens;
+        const summary = await fetchMetaAccountResultCost(fixedMetaAccessToken, normalizeMetaAccount(cliente.meta_ads_act), range.since, range.until, goal);
+        return [cliente.id, { ...summary, goalKey, label: goal.metricLabel, since: range.since, until: range.until }];
+      } catch (error) {
+        return [cliente.id, { error: error.message || 'Falha Meta Ads' }];
+      }
+    }));
+    state.clientMetaCosts = {
+      loading: false,
+      loaded: true,
+      error: '',
+      byClienteId: Object.fromEntries(entries),
+    };
+  } catch (error) {
+    state.clientMetaCosts = {
+      ...state.clientMetaCosts,
+      loading: false,
+      loaded: true,
+      error: error.message || 'Nao foi possivel carregar custo por resultado da Meta Ads.',
+    };
+  }
+  render();
+}
+
+function renderCrm() {
+  const kanban = crmStages.map((stage) => {
+    const leads = state.leads.filter((lead) => lead.etapa === stage);
+    const stageValue = leads.reduce((sum, lead) => sum + Number(lead.investimento_disponivel || lead.ticket_medio || 0), 0);
+    return `
+      <section class="kanban-column crm-stage-${stage}">
+        <header>
+          <div>
+            <span>${label(stage)}</span>
+            <strong>${leads.length} lead${leads.length === 1 ? '' : 's'}</strong>
+          </div>
+          <small>${money(stageValue)}</small>
+        </header>
+        <div class="kanban-column-body">
+          ${leads.map(renderLeadCard).join('') || emptyState('Sem leads', 'Use o seletor de etapa para mover oportunidades.')}
+        </div>
+      </section>
+    `;
+  }).join('');
+
+  return `
+    ${pageHeader('CRM Comercial', 'Funil de prospeccao da propria agencia.', `<button class="button" data-action="new" data-entity="crm"><i data-lucide="plus"></i>Novo lead</button>`)}
+    <div class="crm-pipeline-summary">
+      ${crmPipelineMetric('Leads', state.leads.length)}
+      ${crmPipelineMetric('Reunioes', state.leads.filter((lead) => ['reuniao_marcada', 'proposta_enviada', 'follow_up', 'fechado'].includes(lead.etapa)).length)}
+      ${crmPipelineMetric('Propostas', state.leads.filter((lead) => ['proposta_enviada', 'follow_up', 'fechado'].includes(lead.etapa)).length)}
+      ${crmPipelineMetric('Fechados', state.leads.filter((lead) => lead.etapa === 'fechado').length)}
+    </div>
+    <div class="kanban">${kanban}</div>
+  `;
+}
+
+function renderLeadCard(lead) {
+  return `
+    <article class="lead-card lead-potential-${escapeHtml(lead.potencial || 'medio')}">
+      <div class="lead-card-top">
+        <strong>${escapeHtml(lead.nome_empresa)}</strong>
+        ${statusBadge(lead.potencial || 'medio')}
+      </div>
+      <p>${escapeHtml(lead.responsavel || lead.whatsapp || 'Sem contato informado')}</p>
+      <div class="lead-card-meta">
+        <span>${escapeHtml(lead.nicho || lead.origem_lead || 'Sem nicho')}</span>
+        <span>${money(lead.investimento_disponivel || lead.ticket_medio || 0)}</span>
+      </div>
+      ${lead.proxima_acao || lead.data_proximo_contato ? `
+        <div class="lead-next-action">
+          <span>${escapeHtml(lead.proxima_acao || 'Proximo contato')}</span>
+          <strong>${date(lead.data_proximo_contato)}</strong>
+        </div>
+      ` : ''}
+      <footer>
+        <select data-action="move-lead" data-id="${lead.id}">
+          ${crmStages.map((stage) => `<option value="${stage}" ${lead.etapa === stage ? 'selected' : ''}>${label(stage)}</option>`).join('')}
+        </select>
+        <button class="icon-button" data-action="edit" data-entity="crm" data-id="${lead.id}" aria-label="Editar lead"><i data-lucide="pencil"></i></button>
+      </footer>
+    </article>
+  `;
+}
+
+function crmPipelineMetric(labelText, value) {
+  return `<div><span>${escapeHtml(labelText)}</span><strong>${escapeHtml(value)}</strong></div>`;
+}
+
+function renderCampanhas() {
+  return `
+    ${pageHeader('Campanhas', 'Registro operacional de campanhas por cliente.', `<button class="secondary-button" data-action="export" data-entity="campanhas"><i data-lucide="download"></i>CSV</button><button class="button" data-action="new" data-entity="campanhas"><i data-lucide="plus"></i>Nova campanha</button>`)}
+    ${renderTablePanel('campanhas', ['Campanha', 'Cliente', 'Plataforma', 'Status', 'Verba mensal', 'Periodo', ''], state.campanhas.map((campanha) => `
+      <tr>
+        <td><strong>${escapeHtml(campanha.nome_campanha)}</strong><span class="muted">${escapeHtml(campanha.objetivo || '')}</span></td>
+        <td>${escapeHtml(campanha.clientes?.nome_empresa || getClienteName(campanha.cliente_id))}</td>
+        <td>${statusBadge(campanha.plataforma)}</td>
+        <td>${statusBadge(campanha.status)}</td>
+        <td>${money(campanha.verba_mensal)}</td>
+        <td>${date(campanha.data_inicio)} ate ${date(campanha.data_fim)}</td>
+        <td class="row-actions">${actionButtons('campanhas', campanha.id)}</td>
+      </tr>`).join(''))}
+  `;
+}
+
+function renderRelatorios() {
+  return `
+    ${pageHeader('Relatorios', 'Lancamento manual preparado para Meta Ads API no futuro.', `<button class="secondary-button" data-action="print"><i data-lucide="printer"></i>PDF</button><button class="secondary-button" data-action="export" data-entity="relatorios"><i data-lucide="download"></i>CSV</button><button class="button" data-action="new" data-entity="relatorios"><i data-lucide="plus"></i>Novo relatorio</button>`)}
+    ${renderTablePanel('relatorios', ['Cliente', 'Periodo', 'Meta Ads', ''], state.relatorios.map((relatorio) => `
+      <tr class="${state.lastSavedRelatorioId === relatorio.id ? 'row-highlight' : ''}">
+        <td>${escapeHtml(relatorio.clientes?.nome_empresa || getClienteName(relatorio.cliente_id))}</td>
+        <td>${date(relatorio.periodo_inicio)} ate ${date(relatorio.periodo_fim)}</td>
+        <td>${escapeHtml(relatorio.meta_ads_act_snapshot || '-')}</td>
+        <td class="row-actions">${relatorioActionButtons(relatorio.id)}</td>
+      </tr>`).join(''))}
+  `;
+}
+
+function renderRelatorioDetail(id) {
+  const relatorio = state.relatorios.find((item) => item.id === id);
+  if (!relatorio) {
+    state.detailRelatorioId = null;
+    render();
+    return;
+  }
+  const cliente = relatorio.clientes?.nome_empresa || getClienteName(relatorio.cliente_id);
+  app.innerHTML = `
+    ${pageHeader('Relatorio do cliente', `${cliente} - ${date(relatorio.periodo_inicio)} ate ${date(relatorio.periodo_fim)}`, `<button class="secondary-button" data-action="back-relatorios"><i data-lucide="arrow-left"></i>Voltar</button><button class="secondary-button" data-action="print"><i data-lucide="printer"></i>PDF</button><button class="button" data-action="edit" data-entity="relatorios" data-id="${relatorio.id}"><i data-lucide="pencil"></i>Editar</button>`)}
+    <section class="panel print-section saved-report">
+      <div class="panel-header">
+        <div>
+          <p class="eyebrow">The Midia Marketing</p>
+          <h2>${escapeHtml(cliente)}</h2>
+          <p class="muted">${date(relatorio.periodo_inicio)} ate ${date(relatorio.periodo_fim)} ${relatorio.meta_ads_act_snapshot ? `- ${escapeHtml(relatorio.meta_ads_act_snapshot)}` : ''}</p>
+        </div>
+        ${statusBadge('ativo')}
+      </div>
+      <div class="stats-grid">
+        ${statCard('Investimento', money(relatorio.investimento), 'badge-dollar-sign', 'gold')}
+        ${statCard('Impressoes', number(relatorio.impressoes), 'eye', 'blue')}
+        ${statCard('Alcance', number(relatorio.alcance), 'radar', 'green')}
+        ${statCard('Cliques', number(relatorio.cliques), 'mouse-pointer-click', 'blue')}
+        ${statCard('CTR', `${Number(relatorio.ctr || 0).toFixed(2)}%`, 'percent', 'green')}
+        ${statCard('CPC', money(relatorio.cpc), 'coins', 'gold')}
+        ${statCard('Leads', number(relatorio.leads), 'user-plus', 'green')}
+        ${statCard('CPL', money(relatorio.custo_por_lead), 'target', 'gold')}
+        ${statCard('Mensagens', number(relatorio.mensagens), 'message-circle', 'blue')}
+        ${statCard('Custo/msg', money(relatorio.custo_por_mensagem), 'messages-square', 'gold')}
+        ${statCard('Vendas', number(relatorio.vendas), 'shopping-bag', 'green')}
+        ${statCard('ROAS', Number(relatorio.roas || 0).toFixed(2), 'trending-up', 'green')}
+      </div>
+      <div class="grid-2">
+        <article class="panel nested-report-panel">
+          <div class="panel-header"><h3>Analise estrategica</h3></div>
+          <p class="muted">${escapeHtml(relatorio.analise_estrategica || 'Sem analise estrategica cadastrada.')}</p>
+        </article>
+        <article class="panel nested-report-panel">
+          <div class="panel-header"><h3>Proximos passos</h3></div>
+          <p class="muted">${escapeHtml(relatorio.proximos_passos || 'Sem proximos passos cadastrados.')}</p>
+        </article>
+      </div>
+    </section>
+  `;
+  bindGlobalActions();
+  renderLucide();
+}
+
+function renderMetaAds() {
+  const clientesComMeta = state.clientes.filter((cliente) => cliente.meta_ads_act);
+  const report = state.metaAds.report;
+  const missingLegacy = legacyMetaAdsClients.filter((legacy) => !state.clientes.some((cliente) => normalizeMetaAccount(cliente.meta_ads_act) === legacy.meta_ads_act));
+  const headerActions = `${isMainAdmin() ? `<button class="secondary-button" data-action="import-meta-clients"><i data-lucide="users-round"></i>Importar clientes (${missingLegacy.length})</button>` : ''}<button class="secondary-button" data-action="print"><i data-lucide="printer"></i>PDF</button>`;
+  return `
+    <div class="screen-only">${pageHeader('Relatórios Meta Ads', 'Modulo dedicado ao projeto Relatorios meta ads, agora conectado aos clientes do The Midia Master.', headerActions)}</div>
+    <section class="panel screen-only">
+      <div class="panel-header"><h2>Consulta Meta Ads API</h2>${statusBadge('ativo')}</div>
+      <div class="form-grid">
+        <div class="token-fixed-box">
+          <span>Access token Meta Ads</span>
+          <strong>Token fixo configurado</strong>
+          <small>Usado automaticamente nas consultas. Nao aparece nos PDFs.</small>
+        </div>
+        <label>Cliente
+          <select data-action="meta-client">
+            <option value="">Selecione um cliente</option>
+            ${clientesComMeta.map((cliente) => `<option value="${cliente.id}" ${state.metaAds.clienteId === cliente.id ? 'selected' : ''}>${escapeHtml(cliente.nome_empresa)} - ${escapeHtml(cliente.meta_ads_act)}</option>`).join('')}
+          </select>
+        </label>
+        <label>Objetivo do relatorio
+          <select data-action="meta-goal">
+            ${Object.entries(metaGoalConfig).map(([key, cfg]) => `<option value="${key}" ${state.metaAds.goal === key ? 'selected' : ''}>${cfg.label}</option>`).join('')}
+          </select>
+        </label>
+        <label>Inicio<input class="input" type="date" data-action="meta-since" value="${escapeHtml(state.metaAds.since)}"></label>
+        <label>Fim<input class="input" type="date" data-action="meta-until" value="${escapeHtml(state.metaAds.until)}"></label>
+        <div class="form-actions">
+          <button class="button" data-action="meta-fetch" type="button"><i data-lucide="refresh-cw"></i>Buscar dados</button>
+        </div>
+      </div>
+      ${state.metaAds.loading ? loadingState('Consultando Meta Ads...') : ''}
+      ${state.metaAds.error ? `<div class="state"><strong>Erro na Meta Ads API</strong><span>${escapeHtml(state.metaAds.error)}</span></div>` : ''}
+    </section>
+    ${report ? renderMetaReport(report) : emptyState('Nenhum relatorio carregado', clientesComMeta.length ? 'Selecione cliente, periodo e token para buscar dados reais.' : 'Cadastre o meta_ads_act em ao menos um cliente.')}
+  `;
+}
+
+function renderMetaReport(report) {
+  return `
+    <section class="meta-report print-section panel saved-report">
+      <div class="meta-report-top screen-only">
+        <button class="secondary-button" data-action="meta-back"><i data-lucide="arrow-left"></i>Voltar</button>
+        <div>
+          <p class="meta-report-eyebrow">Gestao de Trafego - The Midia Marketing</p>
+          <h2>${escapeHtml(report.cliente.nome_empresa)}</h2>
+          <p>${escapeHtml(report.since)} a ${escapeHtml(report.until)} - ${escapeHtml(report.accountId)} - <strong>${report.rows.length} ativos</strong></p>
+          ${report.previous ? `<p class="meta-compare-period">Comparado com ${escapeHtml(report.previous.since)} a ${escapeHtml(report.previous.until)}</p>` : ''}
+        </div>
+        <div class="meta-report-actions">
+          <button class="button" data-action="meta-save-report"><i data-lucide="file-plus-2"></i>Salvar</button>
+          <button class="secondary-button" data-action="print"><i data-lucide="download"></i>Baixar PDF</button>
+        </div>
+      </div>
+      <div class="meta-kpi-grid">
+        ${metaKpi('Total de anuncios ativos', report.rows.length, `${report.rows.length} no periodo`, false, metaComparison(report.rows.length, report.previous?.rows?.length || 0, number))}
+        ${metaKpi(`Gasto - ${report.since} a ${report.until}`, money(report.totals.investimento), 'anuncios ativos', false, metaComparison(report.totals.investimento, report.previous?.totals?.investimento || 0, money))}
+        ${metaKpi('Cliques no periodo', number(report.totals.cliques), 'total combinado', false, metaComparison(report.totals.cliques, report.previous?.totals?.cliques || 0, number))}
+        ${metaKpi(`${report.goal.metricLabel} no periodo`, number(report.totals.resultados), 'total de resultados', false, metaComparison(report.totals.resultados, report.previous?.totals?.resultados || 0, number))}
+        ${metaKpi('Impressoes', number(report.totals.impressoes), '', false, metaComparison(report.totals.impressoes, report.previous?.totals?.impressoes || 0, number))}
+        ${metaKpi('Alcance', number(report.totals.alcance), '', false, metaComparison(report.totals.alcance, report.previous?.totals?.alcance || 0, number))}
+        ${metaKpi('CTR medio', `${report.totals.ctr.toFixed(2)}%`, '', false, metaComparison(report.totals.ctr, report.previous?.totals?.ctr || 0, formatPercent))}
+        ${metaKpi('CPC medio', money(report.totals.cpc), '', true, metaComparison(report.totals.cpc, report.previous?.totals?.cpc || 0, money, true))}
+        ${metaKpi('CPM medio', money(report.totals.cpm), '', true, metaComparison(report.totals.cpm, report.previous?.totals?.cpm || 0, money, true))}
+        ${metaKpi(report.goal.costLabel, money(report.totals.custo_por_resultado), '', true, metaComparison(report.totals.custo_por_resultado, report.previous?.totals?.custo_por_resultado || 0, money, true))}
+      </div>
+      <div class="meta-toolbar">
+        <div class="meta-tabs">
+          <button class="${state.metaAds.viewMode === 'cards' ? 'active' : ''}" data-action="meta-view-mode" data-mode="cards">Cards</button>
+          <button class="${state.metaAds.viewMode === 'campaigns' ? 'active' : ''}" data-action="meta-view-mode" data-mode="campaigns">Campanhas</button>
+          <button class="${state.metaAds.viewMode === 'table' ? 'active' : ''}" data-action="meta-view-mode" data-mode="table">Tabela 4 semanas</button>
+        </div>
+        <input class="input meta-search" placeholder="Buscar anuncio..." data-action="meta-search">
+        <span>${report.rows.length} anuncio(s)</span>
+      </div>
+      ${renderMetaReportBody(report)}
+      <footer class="meta-report-footer">
+        <span>The Midia Marketing - Token nao exposto</span>
+        <span>Atualizado em ${new Date().toLocaleString('pt-BR')}</span>
+      </footer>
+    </section>
+    ${renderGoogleAdsSection()}
+  `;
+}
+
+function renderMetaReportBody(report) {
+  if (state.metaAds.viewMode === 'campaigns') return renderMetaCampaigns(report.rows, report.goal);
+  if (state.metaAds.viewMode === 'table') return renderMetaWeeklyTable(report.weeklyRows || [], report.goal);
+  return `<div class="meta-ad-list">${report.rows.map((row) => renderMetaAdCard(row, report.goal)).join('') || emptyState('Sem anuncios', 'Nenhum dado retornado pela Meta Ads API.')}</div>`;
+}
+
+function renderGoogleAdsSection() {
+  const { loading, error, report } = state.googleAds;
+  if (!loading && !error && !report) return '';
+
+  if (loading) {
+    return `
+      <section class="panel google-ads-section">
+        <div class="panel-header">
+          <div>
+            <p class="eyebrow">Google Ads</p>
+            <h2>Carregando dados Google Ads...</h2>
+          </div>
+        </div>
+        ${loadingState('Consultando Google Ads...')}
+      </section>
+    `;
+  }
+
+  if (error) {
+    return `
+      <section class="panel google-ads-section">
+        <div class="panel-header">
+          <div>
+            <p class="eyebrow">Google Ads</p>
+            <h2>Erro ao carregar Google Ads</h2>
+          </div>
+        </div>
+        <div class="state"><strong>Erro</strong><span>${escapeHtml(error)}</span></div>
+      </section>
+    `;
+  }
+
+  const t = report.totals;
+  const impressionShareCol = (v) => v != null ? `${v.toFixed(1)}%` : '—';
+
+  return `
+    <section class="panel google-ads-section print-section">
+      <div class="panel-header">
+        <div>
+          <p class="eyebrow">Google Ads — ${escapeHtml(report.clienteName || report.customerId)}</p>
+          <h2>Campanhas Google Ads</h2>
+          <p class="muted">${escapeHtml(report.since)} a ${escapeHtml(report.until)} · ID ${escapeHtml(report.customerId)}</p>
+        </div>
+      </div>
+
+      <div class="meta-kpi-grid">
+        ${metaKpi('Investimento Google', money(t.spend), '', false)}
+        ${metaKpi('Impressoes Google', number(t.impressions), '', false)}
+        ${metaKpi('Cliques Google', number(t.clicks), '', false)}
+        ${metaKpi('CTR Google', `${t.ctr.toFixed(2)}%`, '', false)}
+        ${metaKpi('CPC medio', money(t.cpc), '', true)}
+        ${metaKpi('CPM medio', money(t.cpm), '', true)}
+      </div>
+
+      ${report.campaigns.length ? `
+        <div class="table-wrap" style="margin-top:1.5rem">
+          <table>
+            <thead>
+              <tr>
+                <th>Campanha</th>
+                <th>Investimento</th>
+                <th>Impressoes</th>
+                <th>Cliques</th>
+                <th>CTR</th>
+                <th>CPC</th>
+                <th>CPM</th>
+                <th title="Parcela de impressoes obtida">Imp. Share</th>
+                <th title="Perdida por orcamento">Perda Orcamento</th>
+                <th title="Perdida por classificacao">Perda Rank</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${report.campaigns.map((c) => `
+                <tr>
+                  <td>${escapeHtml(c.name)}</td>
+                  <td>${money(c.spend)}</td>
+                  <td>${number(c.impressions)}</td>
+                  <td>${number(c.clicks)}</td>
+                  <td>${c.ctr.toFixed(2)}%</td>
+                  <td>${money(c.cpc)}</td>
+                  <td>${money(c.cpm)}</td>
+                  <td>${impressionShareCol(c.impressionShare)}</td>
+                  <td>${impressionShareCol(c.lostBudget)}</td>
+                  <td>${impressionShareCol(c.lostRank)}</td>
+                </tr>`).join('')}
+            </tbody>
+          </table>
+        </div>` : ''}
+
+      ${report.keywords.length ? `
+        <div style="margin-top:2rem">
+          <h3 style="margin-bottom:1rem">Palavras-chave (top ${report.keywords.length})</h3>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Palavra-chave</th>
+                  <th>Tipo</th>
+                  <th>Investimento</th>
+                  <th>Impressoes</th>
+                  <th>Cliques</th>
+                  <th>CTR</th>
+                  <th>CPC</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${report.keywords.map((k) => `
+                  <tr>
+                    <td>${escapeHtml(k.text)}</td>
+                    <td>${escapeHtml(k.matchType)}</td>
+                    <td>${money(k.spend)}</td>
+                    <td>${number(k.impressions)}</td>
+                    <td>${number(k.clicks)}</td>
+                    <td>${k.ctr.toFixed(2)}%</td>
+                    <td>${money(k.cpc)}</td>
+                  </tr>`).join('')}
+              </tbody>
+            </table>
+          </div>
+        </div>` : ''}
+    </section>
+  `;
+}
+
+function renderMetaCampaigns(rows, goal) {
+  const grouped = new Map();
+  rows.forEach((row) => {
+    const key = row.campaign_name || 'Sem campanha';
+    const current = grouped.get(key) || { name: key, ads: 0, spend: 0, impressions: 0, clicks: 0, resultados: 0 };
+    current.ads += 1;
+    current.spend += row.spend;
+    current.impressions += row.impressions;
+    current.clicks += row.clicks;
+    current.resultados += row.resultados;
+    grouped.set(key, current);
+  });
+  const campaigns = [...grouped.values()].sort((a, b) => b.spend - a.spend);
+  return `
+    <div class="meta-ad-list">
+      ${campaigns.map((campaign) => {
+        const ctr = campaign.impressions ? (campaign.clicks / campaign.impressions) * 100 : 0;
+        const cpc = campaign.clicks ? campaign.spend / campaign.clicks : 0;
+        return `
+          <article class="meta-ad-card meta-campaign-card">
+            <div class="meta-thumb"><span>${escapeHtml(campaign.name.slice(0, 2).toUpperCase())}</span></div>
+            <div class="meta-ad-main">
+              <div class="meta-status"><span></span>${campaign.ads} anuncios</div>
+              <h3>${escapeHtml(campaign.name)}</h3>
+              <p>Resumo consolidado da campanha no periodo selecionado.</p>
+              <div class="meta-ad-metrics">
+                ${metaAdMetric('Gasto', money(campaign.spend))}
+                ${metaAdMetric('Impressoes', number(campaign.impressions))}
+                ${metaAdMetric('Cliques', number(campaign.clicks))}
+                ${metaAdMetric('CTR', `${ctr.toFixed(2)}%`)}
+                ${metaAdMetric('CPC', money(cpc))}
+                ${metaAdMetric(goal.metricLabel, campaign.resultados ? number(campaign.resultados) : '-')}
+                ${metaAdMetric(goal.shortCostLabel, campaign.resultados ? money(campaign.spend / campaign.resultados) : '-')}
+              </div>
+            </div>
+          </article>
+        `;
+      }).join('') || emptyState('Sem campanhas', 'Nenhuma campanha retornada.')}
+    </div>
+  `;
+}
+
+function renderMetaTable(rows, goal) {
+  return `
+    <section class="table-panel meta-table-panel">
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Anuncio</th><th>Campanha</th><th>Gasto</th><th>Impressoes</th><th>Cliques</th><th>CTR</th><th>CPC</th><th>${escapeHtml(goal.metricLabel)}</th><th>${escapeHtml(goal.shortCostLabel)}</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.map((row) => `<tr>
+              <td><strong>${escapeHtml(row.ad_name || '-')}</strong></td>
+              <td>${escapeHtml(row.campaign_name || '-')}</td>
+              <td>${money(row.spend)}</td>
+              <td>${number(row.impressions)}</td>
+              <td>${number(row.clicks)}</td>
+              <td>${Number(row.ctr || 0).toFixed(2)}%</td>
+              <td>${money(row.cpc)}</td>
+              <td>${row.resultados ? number(row.resultados) : '-'}</td>
+              <td>${row.resultados ? money(row.spend / row.resultados) : '-'}</td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  `;
+}
+
+function renderMetaWeeklyTable(rows, goal) {
+  const weeks = buildFourWeekSummary(rows);
+  return `
+    <div class="meta-weekly-report">
+      <div class="meta-weekly-heading">
+        <h3>Ultimas 4 semanas</h3>
+        <span>Resumo consolidado por semana</span>
+      </div>
+      <section class="table-panel meta-table-panel meta-week-summary-panel">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Semana</th>
+                <th>Periodo</th>
+                <th>Gasto</th>
+                <th>Impressoes</th>
+                <th>Alcance</th>
+                <th>Cliques</th>
+                <th>CTR</th>
+                <th>CPC</th>
+                <th>${escapeHtml(goal.metricLabel)}</th>
+                <th>${escapeHtml(goal.shortCostLabel)}</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${weeks.map((week, index) => {
+                const totals = summarizeMetaRows(week.rows);
+                return `
+                  <tr>
+                    <td><strong>Semana ${index + 1}</strong></td>
+                    <td>${date(week.since)} ate ${date(week.until)}</td>
+                    <td>${money(totals.investimento)}</td>
+                    <td>${number(totals.impressoes)}</td>
+                    <td>${number(totals.alcance)}</td>
+                    <td>${number(totals.cliques)}</td>
+                    <td>${totals.ctr.toFixed(2)}%</td>
+                    <td>${money(totals.cpc)}</td>
+                    <td>${totals.resultados ? number(totals.resultados) : '-'}</td>
+                    <td>${totals.resultados ? money(totals.custo_por_resultado) : '-'}</td>
+                  </tr>
+                `;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+function metaKpi(title, value, sub = '', wide = false, comparison = '') {
+  return `
+    <article class="meta-kpi ${wide ? 'wide' : ''}">
+      <span>${escapeHtml(title)}</span>
+      <strong>${escapeHtml(value)}</strong>
+      ${sub ? `<small>${escapeHtml(sub)}</small>` : ''}
+      ${comparison || ''}
+    </article>
+  `;
+}
+
+function metaComparison(current, previous, formatter = number, inverse = false) {
+  const currentValue = Number(current || 0);
+  const previousValue = Number(previous || 0);
+  const diff = currentValue - previousValue;
+  const direction = diff > 0 ? 'up' : diff < 0 ? 'down' : 'flat';
+  const performance = direction === 'flat' ? 'flat' : inverse ? (diff < 0 ? 'good' : 'bad') : (diff > 0 ? 'good' : 'bad');
+  const pct = previousValue ? `${diff > 0 ? '+' : ''}${((diff / previousValue) * 100).toFixed(1)}%` : currentValue ? 'novo' : '0.0%';
+  return `
+    <div class="meta-kpi-compare">
+      <small>Anterior: ${escapeHtml(formatter(previousValue))}</small>
+      <em class="${performance}">${escapeHtml(pct)}</em>
+    </div>
+  `;
+}
+
+function formatPercent(value) {
+  return `${Number(value || 0).toFixed(2)}%`;
+}
+
+function renderMetaAdCard(row, goal) {
+  return `
+    <article class="meta-ad-card">
+      <div class="meta-thumb">${row.thumb ? `<img src="${escapeHtml(row.thumb)}" alt="">` : `<span>${escapeHtml((row.ad_name || row.campaign_name || 'AD').slice(0, 2).toUpperCase())}</span>`}</div>
+      <div class="meta-ad-main">
+        <div class="meta-status"><span></span>Ativo</div>
+        <h3>${escapeHtml(row.ad_name || row.campaign_name || '-')}</h3>
+        <p>${escapeHtml(row.campaign_name || '')}${row.adset_name ? ` - ${escapeHtml(row.adset_name)}` : ''}</p>
+        <div class="meta-ad-metrics">
+          ${metaAdMetric('Gasto', money(row.spend))}
+          ${metaAdMetric('Impressoes', number(row.impressions))}
+          ${metaAdMetric('Cliques', number(row.clicks))}
+          ${metaAdMetric('CTR', `${Number(row.ctr || 0).toFixed(2)}%`)}
+          ${metaAdMetric('CPC', money(row.cpc))}
+          ${metaAdMetric(goal.metricLabel, row.resultados ? number(row.resultados) : '-')}
+          ${metaAdMetric(goal.shortCostLabel, row.resultados ? money(row.spend / row.resultados) : '-')}
+        </div>
+      </div>
+    </article>
+  `;
+}
+
+function metaAdMetric(labelText, value) {
+  return `<div><span>${escapeHtml(labelText)}</span><strong>${escapeHtml(value)}</strong></div>`;
+}
+
+function renderGbp() {
+  const report = state.gbp.report;
+  return `
+    ${pageHeader('GMN Análises', 'Modulo dedicado a analises locais do Google Meu Negocio.')}
+    <section class="panel gbp-control-panel">
+      <div class="panel-header"><h2>Analise local do perfil</h2>${statusBadge('em_andamento')}</div>
+      <p class="muted">Localiza o perfil no Google Places, cria uma grade ao redor do ponto escolhido e mede a posicao do negocio nos 20 primeiros resultados para a palavra-chave.</p>
+      <div class="form-grid">
+        <label>Perfil, nome, endereco ou link Maps
+          <input class="input" data-action="gbp-query" value="${escapeHtml(state.gbp.businessQuery)}" placeholder="Ex: The Midia Marketing Campinas">
+        </label>
+        <label>Palavra-chave
+          <input class="input" data-action="gbp-keyword" value="${escapeHtml(state.gbp.keyword)}" placeholder="Ex: agencia de marketing">
+        </label>
+        <label>Raio
+          <select data-action="gbp-radius">
+            ${[
+              ['0.5', '0,5 km'],
+              ['1', '1 km'],
+              ['2', '2 km'],
+              ['3', '3 km'],
+              ['5', '5 km'],
+              ['10', '10 km'],
+            ].map(([value, text]) => `<option value="${value}" ${Number(state.gbp.radiusKm) === Number(value) ? 'selected' : ''}>${text}</option>`).join('')}
+          </select>
+        </label>
+        <label>Centro da grade opcional
+          <input class="input" data-action="gbp-center" value="${escapeHtml(state.gbp.searchCenter)}" placeholder="URL do Maps com @lat,lng ou lat,lng">
+        </label>
+        <label>Raio por busca
+          <select data-action="gbp-search-radius">
+            ${[
+              ['', 'Auto'],
+              ['500', '500 m'],
+              ['1000', '1 km'],
+              ['1500', '1,5 km'],
+              ['3000', '3 km'],
+            ].map(([value, text]) => `<option value="${value}" ${String(state.gbp.searchRadiusMeters) === value ? 'selected' : ''}>${text}</option>`).join('')}
+          </select>
+        </label>
+        <label>Grade
+          <select data-action="gbp-grid">
+            ${[3, 5, 7, 9].map((size) => `<option value="${size}" ${Number(state.gbp.gridSize) === size ? 'selected' : ''}>${size} x ${size}</option>`).join('')}
+          </select>
+        </label>
+        <div class="form-actions">
+          <button class="button" data-action="gbp-fetch" type="button"><i data-lucide="map-pinned"></i>Gerar diagnostico</button>
+        </div>
+      </div>
+      ${state.gbp.loading ? loadingState('Consultando Google Places...') : ''}
+      ${state.gbp.error ? `<div class="state"><strong>Erro no GMN</strong><span>${escapeHtml(state.gbp.error)}</span></div>` : ''}
+    </section>
+    ${report ? renderGbpReport(report) : emptyState('Nenhum diagnostico gerado', 'Preencha os dados acima e gere a analise local do perfil.')}
+  `;
+}
+
+function renderGbpReport(report) {
+  const center = report.center || report.details?.location || {};
+  const centerSource = report.centerSource === 'business' ? 'endereco do estabelecimento' : report.centerSource === 'url' ? 'URL do Google Maps' : 'coordenadas manuais';
+  const generatedAt = report.generatedAt ? new Date(report.generatedAt).toLocaleString('pt-BR') : '-';
+  const searchBias = report.searchBiasMeters ? `${Number(report.searchBiasMeters).toLocaleString('pt-BR')} m` : 'auto';
+  return `
+    <section class="print-section gbp-report">
+      <div class="gbp-report-actions screen-only">
+        <button class="button" data-action="print"><i data-lucide="printer"></i>Salvar em PDF</button>
+      </div>
+
+      <header class="gbp-report-header gbp-report-hero">
+        <div class="gbp-hero-main">
+          <p class="gbp-blue-eyebrow">Analise de Ranking</p>
+          <h2>${escapeHtml(report.details?.name || 'Perfil analisado')}</h2>
+          <p>${escapeHtml(report.details?.address || '')}</p>
+          <div class="gbp-report-tags">
+            <span><i data-lucide="search"></i>${escapeHtml(report.keyword || '-')}</span>
+            <span><i data-lucide="calendar-clock"></i>${escapeHtml(generatedAt)}</span>
+            <span><i data-lucide="scan-search"></i>${escapeHtml(report.gridSize || '-')} x ${escapeHtml(report.gridSize || '-')}</span>
+          </div>
+        </div>
+        <div class="gbp-score-card">
+          <strong>${escapeHtml(`${report.health?.score || 0}%`)}</strong>
+          <span>saude do perfil</span>
+        </div>
+      </header>
+
+      <section class="gbp-report-overview">
+        <article class="gbp-light-panel gbp-method-card">
+          <div class="gbp-section-title">
+            <span><i data-lucide="route"></i></span>
+            <div>
+              <h3>Configuracao da busca</h3>
+              <p>Como a grade foi montada para medir o ranking local.</p>
+            </div>
+          </div>
+          <div class="gbp-method-cards">
+            ${gbpInfoCard('Centro', centerSource, formatGbpPoint(center))}
+            ${gbpInfoCard('Grade', `${report.gridSize || '-'} x ${report.gridSize || '-'}`, `${report.metrics?.totalPoints || 0} pontos analisados`)}
+            ${gbpInfoCard('Raio da grade', `${report.radiusKm || '-'} km`, `${report.searchAreaKm2 || '-'} km2 de cobertura`)}
+            ${gbpInfoCard('Busca por ponto', searchBias, `Espacamento ${report.gridStepKm || 'auto'} km`)}
+          </div>
+          ${report.warning ? `<p class="gbp-method-warning">${escapeHtml(report.warning)}</p>` : ''}
+        </article>
+
+        <article class="gbp-light-panel gbp-reading-card">
+          <div class="gbp-section-title">
+            <span><i data-lucide="activity"></i></span>
+            <div>
+              <h3>Leitura rapida</h3>
+              <p>Indicadores principais para entender o resultado.</p>
+            </div>
+          </div>
+          <div class="gbp-mini-metrics">
+            ${gbpMiniMetric(report.metrics?.arp || report.metrics?.averagePosition || '20+', 'ARP')}
+            ${gbpMiniMetric(report.metrics?.atrp || '20+', 'ATRP')}
+            ${gbpMiniMetric(`${report.metrics?.solv || 0}%`, 'solV')}
+            ${gbpMiniMetric(`${report.metrics?.foundPoints || 0} / ${report.metrics?.totalPoints || 0}`, 'P.E')}
+          </div>
+        </article>
+      </section>
+
+      <section class="gbp-light-panel gbp-metric-legend-panel">
+        <div class="gbp-section-title">
+          <span><i data-lucide="book-open-check"></i></span>
+          <div>
+            <h3>Legenda das metricas</h3>
+            <p>Quanto menor ARP e ATRP, melhor. Quanto maior solV e P.E, melhor.</p>
+          </div>
+        </div>
+        <div class="gbp-definition-grid">
+          ${gbpDefinition('ARP', 'Posicao media quando o perfil foi encontrado.')}
+          ${gbpDefinition('ATRP', 'Posicao media total, contando pontos nao encontrados como fora do top 20.')}
+          ${gbpDefinition('solV', 'Percentual da grade em que o perfil apareceu no top 3.')}
+          ${gbpDefinition('P.E', 'Pontos encontrados dentro do total analisado.')}
+        </div>
+      </section>
+
+      ${renderGbpMapSection(report)}
+
+      <div class="gbp-metric-row">
+        ${gbpBigMetric(`${report.metrics?.visibility || 0}%`, 'visibilidade no grid')}
+        ${gbpBigMetric(report.metrics?.averagePosition || '20+', 'posicao media')}
+        ${gbpBigMetric(report.metrics?.bestPosition || '20+', 'melhor posicao')}
+        ${gbpBigMetric(report.details?.userRatingsTotal || 0, 'avaliacoes')}
+      </div>
+
+      <section class="gbp-light-panel">
+        <h3>Grade de ranking</h3>
+        ${renderGbpRankingGrid(report)}
+      </section>
+
+      <section class="gbp-light-panel">
+        <h3>Diagnostico e proximas acoes</h3>
+        <div class="gbp-recommendations">${(report.recommendations || []).map(renderGbpRecommendation).join('')}</div>
+      </section>
+
+      <section class="gbp-light-panel">
+        <h3>Checklist do perfil</h3>
+        <div class="gbp-checks">${(report.health?.checks || []).map(renderGbpCheck).join('')}</div>
+      </section>
+
+      <section class="gbp-light-panel">
+        <h3>Concorrentes mais recorrentes</h3>
+        <div class="table-wrap">
+          <table class="gbp-competitors-table">
+            <thead><tr><th>Concorrente</th><th>Nota</th><th>Avaliacoes</th><th>Encontrado</th><th>ARP</th><th>ATRP</th><th>solV</th></tr></thead>
+            <tbody>${(report.competitors || []).slice(0, 20).map((item) => `<tr>
+              <td><strong>${escapeHtml(item.name)}</strong><br><span>${escapeHtml(item.address || '')}</span></td>
+              <td>${escapeHtml(item.rating || '-')}</td>
+              <td>${number(item.userRatingsTotal || 0)}</td>
+              <td>${escapeHtml(item.foundLabel || `${item.appearances || 0} / ${report.metrics?.totalPoints || 0}`)}<br><span>${escapeHtml(item.visibility || 0)}%</span></td>
+              <td>${escapeHtml(item.arp || item.averagePosition || '-')}</td>
+              <td>${escapeHtml(item.atrp || '-')}</td>
+              <td>${escapeHtml(item.solv || 0)}%</td>
+            </tr>`).join('')}</tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="gbp-light-panel">
+        <h3>Dados do perfil</h3>
+        ${renderGbpProfileData(report)}
+      </section>
+    </section>
+  `;
+}
+
+function gbpMiniMetric(value, labelText) {
+  return `<article><strong>${escapeHtml(value)}</strong><span>${escapeHtml(labelText)}</span></article>`;
+}
+
+function gbpBigMetric(value, labelText) {
+  return `<article><strong>${escapeHtml(value)}</strong><span>${escapeHtml(labelText)}</span></article>`;
+}
+
+function gbpInfoCard(title, value, text) {
+  return `
+    <article class="gbp-info-card">
+      <span>${escapeHtml(title)}</span>
+      <strong>${escapeHtml(value)}</strong>
+      <small>${escapeHtml(text)}</small>
+    </article>
+  `;
+}
+
+function gbpDefinition(labelText, text) {
+  return `
+    <article class="gbp-definition">
+      <strong>${escapeHtml(labelText)}</strong>
+      <p>${escapeHtml(text)}</p>
+    </article>
+  `;
+}
+
+function renderGbpMapSection(report) {
+  return `
+    <section class="gbp-light-panel">
+      <h3>Mapa de locais da regiao com a busca "${escapeHtml(report.keyword)}"</h3>
+      ${renderGbpMap(report)}
+    </section>
+  `;
+}
+
+function renderGbpMap(report) {
+  const points = report.localResults || [];
+  const bounds = getGbpBounds(points, report.details?.location, report.center);
+  const map = buildStaticOsmMap(bounds);
+  const business = report.details?.location;
+  return `
+    <div class="gbp-map">
+      <div class="gbp-map-tiles">
+        ${map.tiles.map((tile) => `<img src="${tile.url}" alt="" loading="lazy" style="left:${tile.left}%;top:${tile.top}%;width:${tile.width}%;height:${tile.height}%;">`).join('')}
+      </div>
+      <div class="gbp-map-overlay">
+        ${points.map((item) => {
+          const point = item.point || {};
+          const pos = projectStaticMapPoint(point, map);
+          const labelText = item.position ? String(item.position) : '20+';
+          return `<span class="gbp-map-dot ${gbpPositionClass(item.position)}" style="left:${pos.x}%;top:${pos.y}%;">${escapeHtml(labelText)}</span>`;
+        }).join('')}
+        ${business ? (() => {
+          const pos = projectStaticMapPoint(business, map);
+          return `<span class="gbp-business-pin" style="left:${pos.x}%;top:${pos.y}%;" aria-hidden="true"></span>`;
+        })() : ''}
+      </div>
+    </div>
+  `;
+}
+
+function buildStaticOsmMap(bounds) {
+  const size = { width: 1200, height: 330 };
+  const center = bounds.center;
+  const zoom = chooseStaticMapZoom(bounds, size);
+  const centerPx = latLngToWorldPixel(center.lat, center.lng, zoom);
+  const viewport = {
+    minX: centerPx.x - size.width / 2,
+    maxX: centerPx.x + size.width / 2,
+    minY: centerPx.y - size.height / 2,
+    maxY: centerPx.y + size.height / 2,
+  };
+  const minTileX = Math.floor(viewport.minX / 256);
+  const maxTileX = Math.floor(viewport.maxX / 256);
+  const minTileY = Math.floor(viewport.minY / 256);
+  const maxTileY = Math.floor(viewport.maxY / 256);
+  const tiles = [];
+  const maxTiles = 2 ** zoom;
+  for (let x = minTileX; x <= maxTileX; x += 1) {
+    for (let y = minTileY; y <= maxTileY; y += 1) {
+      if (y < 0 || y >= maxTiles) continue;
+      const wrappedX = ((x % maxTiles) + maxTiles) % maxTiles;
+      tiles.push({
+        url: `https://tile.openstreetmap.org/${zoom}/${wrappedX}/${y}.png`,
+        left: ((x * 256 - viewport.minX) / size.width) * 100,
+        top: ((y * 256 - viewport.minY) / size.height) * 100,
+        width: (256 / size.width) * 100,
+        height: (256 / size.height) * 100,
+      });
+    }
+  }
+  return { ...size, zoom, viewport, tiles };
+}
+
+function chooseStaticMapZoom(bounds, size) {
+  for (let zoom = 16; zoom >= 7; zoom -= 1) {
+    const nw = latLngToWorldPixel(bounds.maxLat, bounds.minLng, zoom);
+    const se = latLngToWorldPixel(bounds.minLat, bounds.maxLng, zoom);
+    const spanX = Math.abs(se.x - nw.x);
+    const spanY = Math.abs(se.y - nw.y);
+    if (spanX <= size.width * 0.96 && spanY <= size.height * 0.90) return zoom;
+  }
+  return 7;
+}
+
+function projectStaticMapPoint(point, map) {
+  const pixel = latLngToWorldPixel(point.lat, point.lng, map.zoom);
+  return {
+    x: ((pixel.x - map.viewport.minX) / map.width) * 100,
+    y: ((pixel.y - map.viewport.minY) / map.height) * 100,
+  };
+}
+
+function latLngToWorldPixel(lat, lng, zoom) {
+  const sinLat = Math.sin((Number(lat) * Math.PI) / 180);
+  const scale = 256 * 2 ** zoom;
+  return {
+    x: ((Number(lng) + 180) / 360) * scale,
+    y: (0.5 - Math.log((1 + sinLat) / (1 - sinLat)) / (4 * Math.PI)) * scale,
+  };
+}
+
+function getGbpBounds(points, businessLocation, centerLocation) {
+  const gridPointsOnly = points.map((item) => item.point).filter((point) => point?.lat && point?.lng);
+  const allPoints = gridPointsOnly.length
+    ? gridPointsOnly
+    : [businessLocation, centerLocation].filter((point) => point?.lat && point?.lng);
+  if (!allPoints.length) {
+    return { minLat: -23, maxLat: -22.8, minLng: -47.2, maxLng: -47, center: { lat: -22.9, lng: -47.1 } };
+  }
+  const lats = allPoints.map((point) => Number(point.lat));
+  const lngs = allPoints.map((point) => Number(point.lng));
+  const minLatRaw = Math.min(...lats);
+  const maxLatRaw = Math.max(...lats);
+  const minLngRaw = Math.min(...lngs);
+  const maxLngRaw = Math.max(...lngs);
+  const latSpan = Math.max(maxLatRaw - minLatRaw, 0.001);
+  const lngSpan = Math.max(maxLngRaw - minLngRaw, 0.001);
+  const latPad = Math.max(latSpan * 0.08, 0.0022);
+  const lngPad = Math.max(lngSpan * 0.08, 0.0022);
+  return {
+    minLat: minLatRaw - latPad,
+    maxLat: maxLatRaw + latPad,
+    minLng: minLngRaw - lngPad,
+    maxLng: maxLngRaw + lngPad,
+    center: {
+      lat: (minLatRaw + maxLatRaw) / 2,
+      lng: (minLngRaw + maxLngRaw) / 2,
+    },
+  };
+}
+
+function renderGbpRankingGrid(report) {
+  const gridSize = Number(report.gridSize || Math.sqrt((report.rankingMatrix || []).length) || 5);
+  return `
+    <div class="gbp-ranking-grid" style="grid-template-columns: repeat(${gridSize}, minmax(36px, 1fr));">
+      ${(report.rankingMatrix || []).map((item) => `<button type="button" class="gbp-rank-cell ${gbpPositionClass(item.position)}" title="${escapeHtml(`${item.lat}, ${item.lng}${item.topResult ? ` | 1o resultado: ${item.topResult}` : ''}`)}">${escapeHtml(item.label || (item.position ? String(item.position) : '20+'))}</button>`).join('')}
+    </div>
+    <div class="gbp-legend"><span><b class="good"></b>Top 3</span><span><b class="mid"></b>4 a 10</span><span><b class="bad"></b>Fora do top 10/20+</span></div>
+  `;
+}
+
+function renderGbpProfileData(report) {
+  const details = report.details || {};
+  const fields = [
+    ['Nome', details.name],
+    ['Endereco', details.address],
+    ['Telefone', details.phone || 'Nao encontrado'],
+    ['Site', details.website || 'Nao encontrado'],
+    ['Google Maps', details.googleUrl || 'Nao encontrado'],
+    ['Nota', details.rating ? `${details.rating} (${details.userRatingsTotal} avaliacoes)` : 'Nao encontrada'],
+    ['Avaliacoes sem resposta', details.totalReviewsFromApi > 0 ? `${details.unansweredReviews} de ${details.totalReviewsFromApi} recentes sem resposta` : 'Verificar manualmente'],
+    ['Fotos', details.photos],
+    ['Categorias', (details.types || []).join(', ')],
+    ['Status', details.businessStatus || 'Nao informado'],
+    ['Horarios', (details.weekdayText || []).join(' | ') || 'Nao encontrados'],
+  ];
+  return `<dl class="gbp-profile-data">${fields.map(([key, value]) => `<dt>${escapeHtml(key)}</dt><dd>${renderGbpValue(value)}</dd>`).join('')}</dl>`;
+}
+
+function renderGbpValue(value) {
+  const text = String(value ?? '');
+  if (text.startsWith('http')) return `<a href="${escapeHtml(text)}" target="_blank" rel="noreferrer">${escapeHtml(text)}</a>`;
+  return escapeHtml(text);
+}
+
+function renderGbpCheck(item) {
+  const statusClass = item.manual ? 'manual' : item.ok ? 'ok' : 'bad';
+  const statusLabel = item.manual ? 'Verificar' : item.ok ? 'OK' : 'Melhorar';
+  const profileLink = item.profileUrl ? ` <a href="${escapeHtml(item.profileUrl)}" target="_blank" rel="noreferrer">Ver perfil</a>` : '';
+  return `
+    <article class="gbp-check ${statusClass}">
+      <span class="gbp-check-dot"></span>
+      <div>
+        <strong>${escapeHtml(item.label)}</strong>
+        <p>${escapeHtml(item.observation || '')}${profileLink}</p>
+        <small><b>Como melhorar:</b> ${escapeHtml(item.recommendation || '')}</small>
+      </div>
+      <span class="gbp-check-status">${escapeHtml(statusLabel)}</span>
+    </article>
+  `;
+}
+
+function renderGbpRecommendation(item) {
+  return `
+    <article class="gbp-recommendation priority-${String(item.priority || 'media').toLowerCase()}">
+      <span>${escapeHtml(item.priority || 'Media')}</span>
+      <div>
+        <strong>${escapeHtml(item.title)}</strong>
+        <p>${escapeHtml(item.body)}</p>
+      </div>
+    </article>
+  `;
+}
+
+function gbpPositionClass(position) {
+  if (!position || position > 10) return 'rank-bad';
+  if (position <= 3) return 'rank-good';
+  return 'rank-mid';
+}
+
+function formatGbpPoint(point) {
+  if (!point?.lat || !point?.lng) return '-';
+  return `${Number(point.lat).toFixed(6)}, ${Number(point.lng).toFixed(6)}`;
+}
+
+function renderTarefas() {
+  const overdue = getOverdueTasks().length;
+  const openTasks = state.tarefas.filter((tarefa) => !['concluida', 'cancelada'].includes(tarefa.status)).length;
+  const doneTasks = state.tarefas.filter((tarefa) => tarefa.status === 'concluida').length;
+  const groups = [
+    ['pendente', 'Pendentes'],
+    ['em_andamento', 'Em andamento'],
+    ['concluida', 'Concluidas'],
+    ['cancelada', 'Canceladas'],
+  ];
+  return `
+    <section class="task-page">
+      ${pageHeader('Tarefas', `${overdue} tarefas vencidas no momento.`, `<button class="secondary-button" data-action="export" data-entity="tarefas"><i data-lucide="download"></i>CSV</button><button class="button" data-action="new" data-entity="tarefas"><i data-lucide="plus"></i>Nova tarefa</button>`)}
+      <div class="task-summary-grid">
+        ${taskSummaryCard('Abertas', openTasks, 'circle-dot', 'blue')}
+        ${taskSummaryCard('Vencidas', overdue, 'calendar-alert', overdue ? 'red' : 'green')}
+        ${taskSummaryCard('Concluidas', doneTasks, 'badge-check', 'green')}
+        ${taskSummaryCard('Total', state.tarefas.length, 'list-checks', 'neutral')}
+      </div>
+
+      <section class="task-board-panel">
+        <div class="task-toolbar">
+          <div class="task-view-tabs">
+            <button class="active" type="button"><i data-lucide="list"></i>Lista</button>
+            <button type="button"><i data-lucide="columns-3"></i>Board</button>
+            <button type="button"><i data-lucide="calendar-days"></i>Calendario</button>
+          </div>
+          <div class="task-toolbar-actions">
+            <span><i data-lucide="filter"></i>Todos os responsaveis</span>
+            <span><i data-lucide="arrow-up-down"></i>Vencimento</span>
+          </div>
+        </div>
+        <div class="task-list-head">
+          <span>Tarefa</span>
+          <span>Cliente</span>
+          <span>Prioridade</span>
+          <span>Responsavel</span>
+          <span>Vencimento</span>
+          <span></span>
+        </div>
+        ${groups.map(([status, title]) => renderTaskGroup(status, title)).join('')}
+      </section>
+    </section>
+  `;
+}
+
+function taskSummaryCard(title, value, icon, tone = 'neutral') {
+  return `
+    <article class="task-summary tone-${tone}">
+      <div class="task-summary-icon"><i data-lucide="${icon}"></i></div>
+      <div class="task-summary-body">
+        <span class="task-summary-label">${escapeHtml(title)}</span>
+        <span class="task-summary-value">${escapeHtml(String(value))}</span>
+      </div>
+    </article>
+  `;
+}
+
+function renderTaskGroup(status, title) {
+  const tasks = state.tarefas.filter((tarefa) => tarefa.status === status);
+  return `
+    <section class="task-group">
+      <button class="task-group-header" type="button">
+        <span class="task-status-dot status-${escapeHtml(status)}"></span>
+        <strong>${escapeHtml(title)}</strong>
+        <em>${tasks.length}</em>
+      </button>
+      <div class="task-group-rows">
+        ${tasks.length ? tasks.map(renderTaskRow).join('') : `<div class="task-empty-row">Nenhuma tarefa aqui.</div>`}
+      </div>
+    </section>
+  `;
+}
+
+function renderTaskRow(tarefa) {
+  const isDone = tarefa.status === 'concluida';
+  const cliente = tarefa.clientes?.nome_empresa || getClienteName(tarefa.cliente_id) || '-';
+  const assignee = tarefa.responsavel || '-';
+  const lists = tarefa.checklists || [];
+  const clTotal = lists.reduce((s, l) => s + (l.items?.length || 0), 0);
+  const clDone  = lists.reduce((s, l) => s + (l.items?.filter(i => i.done).length || 0), 0);
+  const clPill  = clTotal > 0
+    ? `<span class="task-checklist-pill${clDone === clTotal ? ' is-complete' : ''}"><i data-lucide="${clDone === clTotal ? 'check-circle-2' : 'list-checks'}"></i>${clDone}/${clTotal}</span>`
+    : '';
+  return `
+    <article class="task-row ${isDone ? 'is-done' : ''}" data-task-id="${tarefa.id}">
+      <div class="task-title-cell">
+        <button class="task-check ${isDone ? 'checked' : ''}" data-action="toggle-task-status" data-id="${tarefa.id}" data-status="${tarefa.status}" aria-label="Alternar status"><i data-lucide="${isDone ? 'check' : 'circle'}"></i></button>
+        <div style="min-width:0">
+          <button class="task-title-link" data-action="open-task-detail" data-id="${tarefa.id}">${escapeHtml(tarefa.titulo)}</button>
+          ${(tarefa.descricao || clPill) ? `<div class="task-row-sub">
+            ${tarefa.descricao ? `<span class="task-row-desc">${escapeHtml(tarefa.descricao)}</span>` : ''}
+            ${clPill}
+          </div>` : ''}
+        </div>
+      </div>
+      <div><span class="task-client-pill">${escapeHtml(cliente)}</span></div>
+      <div>${taskPriorityPill(tarefa.prioridade)}</div>
+      <div>${taskAssignee(assignee)}</div>
+      <div>${taskDuePill(tarefa.data_vencimento, tarefa.status)}</div>
+      <div class="task-row-actions">${actionButtons('tarefas', tarefa.id)}</div>
+    </article>
+  `;
+}
+
+function taskPriorityPill(priority) {
+  const key = priority || 'media';
+  return `<span class="task-priority priority-${escapeHtml(key)}"><i data-lucide="flag"></i>${escapeHtml(label(key))}</span>`;
+}
+
+function taskAssignee(name) {
+  if (!name || name === '-') return '<span class="muted">-</span>';
+  const initials = String(name).split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join('').toUpperCase();
+  return `<span class="task-assignee"><b>${escapeHtml(initials)}</b>${escapeHtml(name)}</span>`;
+}
+
+function taskDuePill(value, status) {
+  if (!value) return '<span class="muted">Sem data</span>';
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const due = new Date(`${value}T00:00:00`);
+  const overdue = due < today && !['concluida', 'cancelada'].includes(status);
+  return `<span class="task-due ${overdue ? 'overdue' : ''}"><i data-lucide="calendar"></i>${date(value)}</span>`;
+}
+
+function renderDiario() {
+  const today = isoDate(new Date());
+  const selectedDate = state.diarioDate || today;
+  const activeClientes = state.clientes.filter((cliente) => cliente.status === 'ativo');
+  const diaryEntries = getDiaryRowsByDate(selectedDate);
+  const doneCount = diaryEntries.filter((item) => !item.isVirtual).length;
+
+  return `
+    ${pageHeader('Diário de Bordo', 'Folha diária dos clientes ativos, com anotações do gestor e comentários do head de tráfego.', `<button class="secondary-button" data-action="export" data-entity="diario"><i data-lucide="download"></i>CSV</button>`)}
+    ${state.diarioMissingTable ? `
+      <section class="panel warning-panel">
+        <strong>Tabela do Diario de Bordo ainda nao existe no Supabase</strong>
+        <p>Execute o SQL em <code>supabase/migrations/20260606_diario_bordo.sql</code>. A tela pode ser visualizada, mas ainda nao vai salvar anotacoes.</p>
+      </section>
+    ` : ''}
+    <section class="diary-date-panel panel">
+      <label>Ver anotações do dia
+        <input class="input" type="date" data-action="diary-date" value="${escapeHtml(selectedDate)}">
+      </label>
+      <button class="secondary-button" data-action="diary-today" type="button"><i data-lucide="calendar-days"></i>Hoje</button>
+    </section>
+    <section class="diary-quick panel">
+      <div>
+        <span>Data selecionada</span>
+        <strong>${date(selectedDate)}</strong>
+      </div>
+      <div>
+        <span>Clientes ativos</span>
+        <strong>${activeClientes.length}</strong>
+      </div>
+      <div>
+        <span>Preenchidos no dia</span>
+        <strong>${doneCount}</strong>
+      </div>
+      <div>
+        <span>Tarefas criadas</span>
+        <strong>${diaryEntries.filter((item) => item.status === 'tarefa_criada').length}</strong>
+      </div>
+    </section>
+    <section class="diary-doc">
+      <header class="diary-doc-header">
+        <h2>${date(selectedDate)}</h2>
+        <p>Diario de bordo operacional</p>
+      </header>
+      <div class="diary-doc-list">
+        ${diaryEntries.map(renderDiarioCard).join('') || emptyState('Nenhum cliente ativo', 'Cadastre ou ative clientes para montar o diario automaticamente.')}
+      </div>
+    </section>
+  `;
+}
+
+function getDiaryRowsByDate(selectedDate) {
+  const activeClientes = state.clientes.filter((cliente) => cliente.status === 'ativo');
+  return activeClientes.map((cliente) => {
+    const entry = state.diarios.find((item) => item.cliente_id === cliente.id && item.data_registro === selectedDate);
+    return {
+      id: entry?.id || '',
+      cliente_id: cliente.id,
+      clientes: { nome_empresa: cliente.nome_empresa },
+      data_registro: selectedDate,
+      autor: entry?.autor || 'Nicolas',
+      revisao_verba_ok: entry?.revisao_verba_ok ?? false,
+      anotacoes: entry?.anotacoes || '',
+      comentario_admin: entry?.comentario_admin || '',
+      tags: entry?.tags || '',
+      status: entry?.status || 'aberto',
+      isVirtual: !entry,
+    };
+  });
+}
+
+function renderDiarioCard(item) {
+  const selected = state.diarioSelectedClienteId === item.cliente_id;
+  return `
+    <article class="diary-card ${selected ? 'selected' : ''}" data-action="diary-select" data-client="${item.cliente_id}">
+      <div class="diary-card-top">
+        <div>
+          <h3>${escapeHtml(item.clientes?.nome_empresa || getClienteName(item.cliente_id) || 'Sem cliente')}</h3>
+          <p>${escapeHtml(item.autor || 'Nicolas')} - ${item.revisao_verba_ok ? 'Revisao de verba e performance OK' : 'Revisao pendente'}</p>
+        </div>
+        ${statusBadge(item.status || 'aberto')}
+      </div>
+      <div class="diary-doc-fields">
+        <label>
+          <span>Observacoes do gestor de trafego</span>
+          <textarea data-action="diary-field" data-field="anotacoes" data-id="${item.id}" data-client="${item.cliente_id}">${escapeHtml(item.anotacoes || '')}</textarea>
+        </label>
+        <label>
+          <span>Observacoes do head de trafego</span>
+          <textarea data-action="diary-field" data-field="comentario_admin" data-id="${item.id}" data-client="${item.cliente_id}" placeholder="Seu comentario interno, ajuste ou direcionamento...">${escapeHtml(item.comentario_admin || '')}</textarea>
+        </label>
+      </div>
+      <label class="diary-check">
+        <input type="checkbox" data-action="diary-ok" data-id="${item.id}" data-client="${item.cliente_id}" ${item.revisao_verba_ok ? 'checked' : ''}>
+        Revisao diaria de verba e performance OK
+      </label>
+      ${selected ? `
+        <div class="diary-context-actions">
+          <button class="button" data-action="diary-to-task" data-id="${item.id}" data-client="${item.cliente_id}"><i data-lucide="check-square"></i>Adicionar tarefa</button>
+          <button class="secondary-button" data-action="diary-to-observation" data-id="${item.id}" data-client="${item.cliente_id}"><i data-lucide="message-square-plus"></i>Salvar em observacoes</button>
+        </div>
+      ` : ''}
+    </article>
+  `;
+}
+
+function renderMetas() {
+  // Linhas existentes indexadas por cliente
+  const metasByCliente = {};
+  state.metas.forEach((m) => {
+    if (!metasByCliente[m.cliente_id]) metasByCliente[m.cliente_id] = [];
+    metasByCliente[m.cliente_id].push(m);
+  });
+
+  const activeClientes = state.clientes.filter((c) => ['ativo', 'prospect'].includes(c.status));
+
+  // helpers
+  const objSel = (selected, id, field) =>
+    `<select class="meta-cell-input" data-action="meta-cell-edit" data-id="${id}" data-field="${field}">
+      ${['mensagens','leads','vendas','seguidores'].map((o) =>
+        `<option value="${o}" ${selected === o ? 'selected' : ''}>${label(o)}</option>`
+      ).join('')}
+    </select>`;
+
+  const numCell = (id, field, val) =>
+    `<input class="meta-cell-input" type="number" min="0" step="0.01"
+      placeholder="—" value="${val != null && val !== '' ? Number(val) : ''}"
+      data-action="meta-cell-edit" data-id="${id}" data-field="${field}">`;
+
+  // Linha nova (rascunho por cliente)
+  const newObjSel = (clienteId) => {
+    const draft = state.metaRowDrafts[clienteId] || {};
+    return `<select class="meta-cell-input" data-action="meta-new-field" data-cliente="${clienteId}" data-field="objetivo">
+      <option value="">Objetivo</option>
+      ${['mensagens','leads','vendas','seguidores'].map((o) =>
+        `<option value="${o}" ${draft.objetivo === o ? 'selected' : ''}>${label(o)}</option>`
+      ).join('')}
+    </select>`;
+  };
+
+  const newNum = (clienteId, field) => {
+    const draft = state.metaRowDrafts[clienteId] || {};
+    return `<input class="meta-cell-input" type="number" min="0" step="0.01"
+      placeholder="—" value="${draft[field] != null ? draft[field] : ''}"
+      data-action="meta-new-field" data-cliente="${clienteId}" data-field="${field}">`;
+  };
+
+  const rows = activeClientes.map((cliente) => {
+    const metas = metasByCliente[cliente.id] || [];
+    const hasMeta = metas.length > 0;
+
+    // Linhas de metas existentes
+    const existingRows = metas.map((m) => `
+      <tr class="meta-row">
+        <td rowspan="1" class="meta-cliente-name">
+          <strong>${escapeHtml(cliente.nome_empresa)}</strong>
+          <span class="muted">${escapeHtml(cliente.meta_ads_act || '')}</span>
+        </td>
+        <td>${objSel(m.objetivo, m.id, 'objetivo')}</td>
+        <td>${numCell(m.id, 'meta_custo_resultado', m.meta_custo_resultado)}</td>
+        <td>${numCell(m.id, 'meta_roas_minimo', m.meta_roas_minimo)}</td>
+        <td>${numCell(m.id, 'meta_ctr_minimo', m.meta_ctr_minimo)}</td>
+        <td>${numCell(m.id, 'verba_diaria_maxima', m.verba_diaria_maxima)}</td>
+        <td>${numCell(m.id, 'threshold_variacao_pct', m.threshold_variacao_pct ?? 30)}</td>
+        <td class="row-actions">
+          <button class="icon-button" data-action="delete" data-entity="metas" data-id="${m.id}" aria-label="Remover meta"><i data-lucide="trash-2"></i></button>
+          <button class="icon-button" title="Adicionar outro objetivo" data-action="meta-add-row" data-cliente="${cliente.id}"><i data-lucide="plus"></i></button>
+        </td>
+      </tr>`).join('');
+
+    // Linha de nova meta para este cliente (aparece se não tem nenhuma, ou se o usuário clicou em +)
+    const showNewRow = !hasMeta || (state.metaRowDrafts[cliente.id]?.open);
+    const newRow = showNewRow ? `
+      <tr class="meta-row meta-new-row" data-new-cliente="${cliente.id}">
+        ${!hasMeta ? `<td class="meta-cliente-name"><strong>${escapeHtml(cliente.nome_empresa)}</strong><span class="muted">${escapeHtml(cliente.meta_ads_act || '')}</span></td>` : '<td></td>'}
+        <td>${newObjSel(cliente.id)}</td>
+        <td>${newNum(cliente.id, 'meta_custo_resultado')}</td>
+        <td>${newNum(cliente.id, 'meta_roas_minimo')}</td>
+        <td>${newNum(cliente.id, 'meta_ctr_minimo')}</td>
+        <td>${newNum(cliente.id, 'verba_diaria_maxima')}</td>
+        <td>${newNum(cliente.id, 'threshold_variacao_pct')}</td>
+        <td class="row-actions">
+          <button class="button" data-action="meta-new-save" data-cliente="${cliente.id}" style="white-space:nowrap; font-size:12px; padding:4px 10px"><i data-lucide="check"></i>Salvar</button>
+        </td>
+      </tr>` : '';
+
+    return existingRows + newRow;
+  }).join('');
+
+  return `
+    ${pageHeader('Metas de Performance', 'Preencha direto na tabela — salva automaticamente. O alerta de anomalias usa esses valores todo dia às 9h.', '')}
+    <section class="panel" style="padding:0;overflow:hidden">
+      <table class="table meta-inline-table">
+        <thead><tr>
+          <th>Cliente</th>
+          <th>Objetivo</th>
+          <th title="Custo máximo por resultado">Custo/resultado (R$)</th>
+          <th title="ROAS mínimo aceitável">ROAS mín.</th>
+          <th title="CTR mínimo em %">CTR mín. (%)</th>
+          <th title="Limite de gasto diário">Verba diária máx. (R$)</th>
+          <th title="% variação vs 7 dias para alerta">Alerta variação (%)</th>
+          <th></th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </section>
+  `;
+}
+
+function renderAlertas() {
+  const metricaLabel = { cpl: 'Custo por Lead/Msg', ctr: 'CTR', roas: 'ROAS', spend: 'Gasto diario' };
+  const metricaUnit  = { cpl: 'R$', ctr: '%', roas: 'x', spend: 'R$' };
+  const severidadeClass = { critica: 'status-urgente', alta: 'status-alta', media: 'status-media' };
+
+  if (state.alertasMissingTable) {
+    return `
+      ${pageHeader('Alertas de Anomalias', 'Monitoramento automatico de CPL, CTR, ROAS e verba.', '')}
+      <section class="panel warning-panel">
+        <strong>Tabela alertas_anomalia ainda nao existe no Supabase</strong>
+        <p>Execute o SQL em <code>supabase/migrations/20260606_alertas_anomalia.sql</code> no Supabase SQL Editor para ativar os alertas.</p>
+      </section>
+    `;
+  }
+
+  const statusFiltro = state.alertasFiltroStatus || 'ativo';
+  const sevFiltro    = state.alertasFiltroSeveridade || 'all';
+  const alertasComPiora = state.alertas.filter((alerta) => !isImprovingAlert(alerta));
+
+  let lista = alertasComPiora.filter((a) => {
+    if (statusFiltro !== 'all' && a.status !== statusFiltro) return false;
+    if (sevFiltro !== 'all' && a.severidade !== sevFiltro) return false;
+    return true;
+  });
+
+  const totalAtivos   = alertasComPiora.filter((a) => a.status === 'ativo').length;
+  const totalCriticos = alertasComPiora.filter((a) => a.status === 'ativo' && a.severidade === 'critica').length;
+  const totalAltos    = alertasComPiora.filter((a) => a.status === 'ativo' && a.severidade === 'alta').length;
+
+  const headerActions = `<button class="secondary-button" data-action="run-verificacao"><i data-lucide="play"></i>Fazer verificacao</button><button class="button" data-action="refresh"><i data-lucide="refresh-cw"></i>Atualizar</button>`;
+
+  return `
+    ${pageHeader('Alertas de Anomalias', 'Deteccao automatica diaria via n8n — CPL, CTR, ROAS e verba por cliente.', headerActions)}
+    <div class="stat-grid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:1.5rem;">
+      <div class="stat-card"><span>Alertas ativos</span><strong style="font-size:28px;color:var(--color-danger,#dc2626)">${totalAtivos}</strong></div>
+      <div class="stat-card"><span>Criticos</span><strong style="font-size:28px;color:var(--color-danger,#dc2626)">${totalCriticos}</strong></div>
+      <div class="stat-card"><span>Alta prioridade</span><strong style="font-size:28px">${totalAltos}</strong></div>
+    </div>
+
+    <section class="panel" style="margin-bottom:1rem;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+      <span style="font-size:13px;color:var(--muted)">Status:</span>
+      ${['ativo', 'resolvido', 'ignorado', 'all'].map((s) => `<button class="secondary-button ${statusFiltro === s ? 'active' : ''}" data-action="alerta-filtro-status" data-val="${s}" style="padding:4px 12px;font-size:12px">${s === 'all' ? 'Todos' : label(s)}</button>`).join('')}
+      <span style="font-size:13px;color:var(--muted);margin-left:12px">Severidade:</span>
+      ${['all', 'critica', 'alta', 'media'].map((s) => `<button class="secondary-button ${sevFiltro === s ? 'active' : ''}" data-action="alerta-filtro-sev" data-val="${s}" style="padding:4px 12px;font-size:12px">${s === 'all' ? 'Todas' : label(s)}</button>`).join('')}
+    </section>
+
+    ${lista.length === 0 ? emptyState('Sem alertas', statusFiltro === 'ativo' ? 'Nenhuma anomalia detectada com os filtros selecionados.' : 'Nenhum alerta neste filtro.') : `
+    <section class="panel" style="padding:0;overflow:hidden">
+      <table class="table">
+        <thead><tr>
+          <th>Cliente</th><th>Metrica</th><th>Ontem</th><th>Ultimos 3d</th><th>Ultimos 7d</th><th>Variacao</th><th>Severidade</th><th>Detectado</th><th></th>
+        </tr></thead>
+        <tbody>
+          ${lista.map((a) => {
+            const isMonetary = ['cpl', 'spend'].includes(a.metrica);
+            const rowClass = a.metrica === 'cpl' ? 'alert-row alert-row-cpl' : a.metrica === 'spend' ? 'alert-row alert-row-spend' : 'alert-row';
+            const fmtVal = (v) => v == null ? '—' : isMonetary ? money(v) : (a.metrica === 'ctr' ? `${Number(v||0).toFixed(2)}%` : `${Number(v||0).toFixed(2)}x`);
+            const variacao = Number(a.variacao_pct || 0);
+            const varColor = variacao > 0 ? 'var(--color-danger,#dc2626)' : 'var(--color-success,#16a34a)';
+            const varIcon = variacao > 0 ? '▲' : '▼';
+
+            // Meta configurada para este alerta
+            const metaRec = state.metas.find(m => m.id === a.meta_id);
+            const goalMap = { cpl: metaRec?.meta_custo_resultado, roas: metaRec?.meta_roas_minimo, ctr: metaRec?.meta_ctr_minimo, spend: metaRec?.verba_diaria_maxima };
+            const goal = goalMap[a.metrica];
+            // true = valor está fora da meta (vermelho)
+            const fora = (v) => {
+              if (v == null || goal == null) return false;
+              return ['cpl','spend'].includes(a.metrica) ? v > goal : v < goal;
+            };
+            const cellStyle = (v) => fora(v) ? 'color:var(--color-danger,#dc2626);font-weight:700' : 'color:var(--color-success,#16a34a);font-weight:600';
+            const v1 = a.valor_1d ?? a.valor_atual;
+            const v3 = a.valor_3d;
+            const v7 = a.valor_referencia;
+
+            return `<tr class="${rowClass}">
+              <td><strong>${escapeHtml(a.clientes?.nome_empresa || a.nome_cliente || '-')}</strong><span class="muted">${escapeHtml(a.meta_ads_act || '')}</span></td>
+              <td>${escapeHtml(metricaLabel[a.metrica] || a.metrica)}${goal != null ? `<span class="muted" style="font-size:11px;display:block">meta: ${fmtVal(goal)}</span>` : ''}</td>
+              <td style="${cellStyle(v1)}"><strong>${fmtVal(v1)}</strong></td>
+              <td>${a.metrica === 'spend' ? '—' : `<span style="${cellStyle(v3)}">${fmtVal(v3)}</span>`}</td>
+              <td>${a.metrica === 'spend' ? '—' : `<span style="${cellStyle(v7)}">${fmtVal(v7)}</span>`}</td>
+              <td style="color:${varColor};font-weight:500">${varIcon} ${Math.abs(variacao).toFixed(1)}%</td>
+              <td><span class="status-badge ${severidadeClass[a.severidade] || ''}">${escapeHtml(a.severidade)}</span></td>
+              <td>${date(a.created_at)}</td>
+              <td class="row-actions">
+                ${a.status === 'ativo' ? `
+                  <button class="ghost-button" data-action="alerta-to-task" data-id="${a.id}" title="Criar tarefa a partir deste alerta"><i data-lucide="clipboard-list"></i></button>
+                  <button class="ghost-button" data-action="resolver-alerta" data-id="${a.id}" title="Marcar como resolvido"><i data-lucide="check-circle"></i></button>
+                  <button class="icon-button" data-action="ignorar-alerta" data-id="${a.id}" title="Ignorar"><i data-lucide="eye-off"></i></button>
+                ` : `<span class="status-badge ${a.status === 'resolvido' ? 'status-concluida' : 'status-cancelada'}">${a.status}</span>`}
+              </td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+    </section>`}
+  `;
+}
+
+function isImprovingAlert(alerta) {
+  const current = Number(alerta.valor_1d ?? alerta.valor_atual);
+  const reference = Number(alerta.valor_referencia ?? alerta.valor_7d ?? alerta.valor_3d);
+  if (Number.isFinite(current) && Number.isFinite(reference)) {
+    if (['cpl', 'spend'].includes(alerta.metrica)) return current < reference;
+    if (['ctr', 'roas'].includes(alerta.metrica)) return current > reference;
+  }
+  return Number(alerta.variacao_pct || 0) < 0;
+}
+
+function renderEquipe() {
+  return `
+    ${pageHeader('Equipe', 'Responsaveis internos da operacao.', `<button class="secondary-button" data-action="export" data-entity="equipe"><i data-lucide="download"></i>CSV</button><button class="button" data-action="new" data-entity="equipe"><i data-lucide="plus"></i>Novo membro</button>`)}
+    ${renderTablePanel('equipe', ['Nome', 'Email', 'Cargo', 'Status', ''], state.equipe.map((member) => `
+      <tr>
+        <td><strong>${escapeHtml(member.nome)}</strong></td>
+        <td>${escapeHtml(member.email || '-')}</td>
+        <td>${escapeHtml(member.cargo || '-')}</td>
+        <td>${statusBadge(member.status)}</td>
+        <td class="row-actions">${actionButtons('equipe', member.id)}</td>
+      </tr>`).join(''))}
+  `;
+}
+
+async function renderClienteDetail(id) {
+  const cliente = state.clientes.find((item) => item.id === id);
+  if (!cliente) return navigate('clientes');
+  const [onboarding, ativos, observacoes] = await Promise.all([
+    onboardingService.getByClienteId(id).catch(() => null),
+    ativoClienteService.list({ eq: { cliente_id: id } }).catch(() => []),
+    observacaoClienteService.list({ eq: { cliente_id: id } }).catch(() => []),
+  ]);
+  const campanhas = state.campanhas.filter((item) => item.cliente_id === id);
+  const relatorios = state.relatorios.filter((item) => item.cliente_id === id);
+  const tarefas = state.tarefas.filter((item) => item.cliente_id === id);
+  const progress = onboardingProgress(onboarding);
+
+  app.innerHTML = `
+    ${pageHeader(cliente.nome_empresa, 'Detalhe completo do cliente.', `<button class="secondary-button" data-action="back-clientes"><i data-lucide="arrow-left"></i>Voltar</button><button class="button" data-action="edit" data-entity="clientes" data-id="${id}"><i data-lucide="pencil"></i>Editar</button>`)}
+    <section class="detail-top">
+      <div class="panel">
+        <div class="kv">
+          ${areaSummary('Status', label(cliente.status))}
+          ${areaSummary('Plano', label(cliente.plano_contratado))}
+          ${areaSummary('Mensalidade', money(cliente.valor_mensal))}
+          ${areaSummary('Verba de trafego', money(cliente.verba_mensal_trafego))}
+          ${areaSummary('Meta Ads act', cliente.meta_ads_act || '-')}
+          ${areaSummary('Responsavel interno', cliente.responsavel_interno || '-')}
+        </div>
+      </div>
+      <div class="panel">
+        <h3>Onboarding</h3>
+        <div class="progress"><span style="width:${progress}%"></span></div>
+        <strong>${progress}% concluido</strong>
+      </div>
+    </section>
+    <div class="tabs">
+      ${['visao', 'campanhas', 'relatorios', 'tarefas', 'onboarding', 'ativos', 'observacoes'].map((tab) => `<button class="tab-button ${state.detailTab === tab ? 'active' : ''}" data-action="detail-tab" data-tab="${tab}">${labelDetailTab(tab)}</button>`).join('')}
+    </div>
+    <section class="panel">${renderDetailTab(cliente, { campanhas, relatorios, tarefas, onboarding, ativos, observacoes })}</section>
+  `;
+  bindGlobalActions();
+  renderLucide();
+}
+
+function renderDetailTab(cliente, data) {
+  if (state.detailTab === 'visao') {
+    return `<div class="kv">
+      ${areaSummary('Responsavel', cliente.responsavel || '-')}
+      ${areaSummary('WhatsApp', cliente.whatsapp || '-')}
+      ${areaSummary('Email', cliente.email || '-')}
+      ${areaSummary('Cidade/UF', [cliente.cidade, cliente.estado].filter(Boolean).join(' / ') || '-')}
+      ${areaSummary('Instagram', cliente.instagram || '-')}
+      ${areaSummary('Site', cliente.site || '-')}
+      ${areaSummary('Landing page', cliente.landing_page || '-')}
+      ${areaSummary('CRM utilizado', cliente.crm_utilizado || '-')}
+    </div><p class="muted">${escapeHtml(cliente.observacoes || '')}</p>`;
+  }
+  if (state.detailTab === 'campanhas') return miniList(data.campanhas, 'nome_campanha', 'status', 'campanhas');
+  if (state.detailTab === 'relatorios') return miniList(data.relatorios, 'periodo_fim', 'roas', 'relatorios');
+  if (state.detailTab === 'tarefas') return miniList(data.tarefas, 'titulo', 'status', 'tarefas');
+  if (state.detailTab === 'ativos') return `${miniList(data.ativos, 'titulo', 'tipo', 'ativos')}<button class="button" data-action="new-related" data-entity="ativos"><i data-lucide="plus"></i>Novo ativo</button>`;
+  if (state.detailTab === 'observacoes') return `${miniList(data.observacoes, 'observacao', 'tipo', 'observacoes')}<button class="button" data-action="new-related" data-entity="observacoes"><i data-lucide="plus"></i>Nova observacao</button>`;
+  return renderOnboarding(data.onboarding);
+}
+
+function renderOnboarding(onboarding) {
+  if (!onboarding) return emptyState('Checklist nao encontrado', 'O trigger cria automaticamente para novos clientes.');
+  return `
+    <div class="checklist">
+      ${onboardingFields.map((field) => `
+        <label><input type="checkbox" data-action="toggle-onboarding" data-id="${onboarding.id}" data-field="${field}" ${onboarding[field] ? 'checked' : ''}>${labelOnboarding(field)}</label>
+      `).join('')}
+    </div>
+    <label class="full" style="margin-top:14px">Observacoes<textarea data-action="onboarding-notes" data-id="${onboarding.id}">${escapeHtml(onboarding.observacoes || '')}</textarea></label>
+  `;
+}
+
+function miniList(items, titleKey, statusKey, entity) {
+  if (!items.length) return emptyState('Nenhum registro', 'Este cliente ainda nao possui itens nesta aba.');
+  return `<div class="table-wrap"><table><tbody>${items.map((item) => `
+    <tr>
+      <td><strong>${escapeHtml(item[titleKey])}</strong></td>
+      <td>${statusBadge(item[statusKey])}</td>
+      <td class="row-actions">${['ativos', 'observacoes'].includes(entity) ? '' : actionButtons(entity, item.id)}</td>
+    </tr>`).join('')}</tbody></table></div>`;
+}
+
+function renderTablePanel(id, heads, rows) {
+  return `
+    <section class="table-panel" id="${id}">
+      <div class="table-header"><h3>Registros</h3><span class="muted">${rows ? '' : '0 itens'}</span></div>
+      ${rows ? `<div class="table-wrap"><table><thead><tr>${heads.map((head) => `<th>${escapeHtml(head)}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div>` : emptyState()}
+    </section>
+  `;
+}
+
+function actionButtons(entity, id) {
+  return `<button class="icon-button" data-action="edit" data-entity="${entity}" data-id="${id}" aria-label="Editar"><i data-lucide="pencil"></i></button><button class="icon-button" data-action="delete" data-entity="${entity}" data-id="${id}" aria-label="Excluir"><i data-lucide="trash-2"></i></button>`;
+}
+
+function relatorioActionButtons(id) {
+  return `<button class="icon-button" data-action="view-relatorio" data-id="${id}" aria-label="Ver relatorio"><i data-lucide="eye"></i></button>${actionButtons('relatorios', id)}`;
+}
+
+function bindGlobalActions() {
+  document.querySelectorAll('[data-action]').forEach((el) => {
+    const action = el.dataset.action;
+    if (action === 'new') el.addEventListener('click', () => openForm(el.dataset.entity));
+    if (action === 'new-related') el.addEventListener('click', () => openForm(el.dataset.entity, null, { cliente_id: state.detailClienteId }));
+    if (action === 'edit') el.addEventListener('click', () => openForm(el.dataset.entity, el.dataset.id));
+    if (action === 'delete') el.addEventListener('click', () => handleDelete(el.dataset.entity, el.dataset.id));
+    if (action === 'export') el.addEventListener('click', () => exportEntity(el.dataset.entity));
+    if (action === 'print') el.addEventListener('click', () => window.print());
+    if (action === 'refresh') el.addEventListener('click', async () => { await loadAll(); render(); toast('Dados atualizados.'); });
+    if (action === 'refresh-client-meta-costs') el.addEventListener('click', () => loadClientMetaCosts(true));
+    if (action === 'toggle-task-status') el.addEventListener('click', () => toggleTaskStatus(el.dataset.id, el.dataset.status));
+    if (action === 'open-task-detail') el.addEventListener('click', () => openTaskDetail(el.dataset.id));
+    if (action === 'detail-cliente') el.addEventListener('click', () => { state.detailClienteId = el.dataset.id; state.detailTab = 'visao'; render(); });
+    if (action === 'back-clientes') el.addEventListener('click', () => { state.detailClienteId = null; state.view = 'clientes'; render(); });
+    if (action === 'view-relatorio') el.addEventListener('click', () => { state.detailRelatorioId = el.dataset.id; render(); });
+    if (action === 'back-relatorios') el.addEventListener('click', () => { state.detailRelatorioId = null; state.view = 'relatorios'; render(); });
+    if (action === 'detail-tab') el.addEventListener('click', () => { state.detailTab = el.dataset.tab; render(); });
+    if (action === 'convert-lead') el.addEventListener('click', () => convertLead(el.dataset.id));
+    if (action === 'move-lead') el.addEventListener('change', () => moveLead(el.dataset.id, el.value));
+    if (action === 'toggle-onboarding') el.addEventListener('change', () => updateOnboarding(el.dataset.id, { [el.dataset.field]: el.checked }));
+    if (action === 'onboarding-notes') el.addEventListener('blur', () => updateOnboarding(el.dataset.id, { observacoes: el.value }));
+    if (action === 'meta-client') el.addEventListener('change', () => {
+      state.metaAds.clienteId = el.value;
+      state.metaAds.goal = inferMetaGoal(state.clientes.find((cliente) => cliente.id === el.value));
+      state.metaAds.report = null;
+      render();
+    });
+    if (action === 'meta-goal') el.addEventListener('change', () => { state.metaAds.goal = el.value; state.metaAds.report = null; });
+    if (action === 'meta-since') el.addEventListener('change', () => { state.metaAds.since = el.value; state.metaAds.report = null; });
+    if (action === 'meta-until') el.addEventListener('change', () => { state.metaAds.until = el.value; state.metaAds.report = null; });
+    if (action === 'meta-fetch') el.addEventListener('click', fetchMetaAdsReport);
+    if (action === 'meta-save-report') el.addEventListener('click', saveMetaReport);
+    if (action === 'meta-back') el.addEventListener('click', () => { state.metaAds.report = null; render(); });
+    if (action === 'meta-view-mode') el.addEventListener('click', () => { state.metaAds.viewMode = el.dataset.mode; render(); });
+    if (action === 'import-meta-clients') el.addEventListener('click', importLegacyMetaAdsClients);
+    if (action === 'gbp-client') el.addEventListener('change', () => { state.gbp.clienteId = el.value; });
+    if (action === 'gbp-query') el.addEventListener('input', () => { state.gbp.businessQuery = el.value; });
+    if (action === 'gbp-keyword') el.addEventListener('input', () => { state.gbp.keyword = el.value; });
+    if (action === 'gbp-radius') el.addEventListener('change', () => { state.gbp.radiusKm = Number(el.value || 3); });
+    if (action === 'gbp-center') el.addEventListener('input', () => { state.gbp.searchCenter = el.value; });
+    if (action === 'gbp-search-radius') el.addEventListener('change', () => { state.gbp.searchRadiusMeters = el.value; });
+    if (action === 'gbp-grid') el.addEventListener('change', () => { state.gbp.gridSize = Number(el.value || 5); });
+    if (action === 'gbp-fetch') el.addEventListener('click', fetchGbpReport);
+    if (action === 'diary-select') el.addEventListener('click', (event) => {
+      if (event.target.closest('textarea, input, button')) return;
+      state.diarioSelectedClienteId = el.dataset.client;
+      render();
+    });
+    if (action === 'diary-date') el.addEventListener('change', () => {
+      state.diarioDate = el.value || isoDate(new Date());
+      state.diarioSelectedClienteId = null;
+      render();
+    });
+    if (action === 'diary-today') el.addEventListener('click', () => {
+      state.diarioDate = isoDate(new Date());
+      state.diarioSelectedClienteId = null;
+      render();
+    });
+    if (action === 'diary-field') el.addEventListener('blur', () => saveDiaryField(el.dataset.client, el.dataset.id, { [el.dataset.field]: el.value }));
+    if (action === 'diary-ok') el.addEventListener('change', () => saveDiaryField(el.dataset.client, el.dataset.id, { revisao_verba_ok: el.checked }));
+    if (action === 'diary-to-task') el.addEventListener('click', () => createTaskFromDiary(el.dataset.id, el.dataset.client));
+    if (action === 'diary-to-observation') el.addEventListener('click', () => createObservationFromDiary(el.dataset.id, el.dataset.client));
+    if (action === 'meta-cell-edit') el.addEventListener('change', async () => {
+      const id = el.dataset.id;
+      const field = el.dataset.field;
+      const raw = el.value;
+      const val = raw === '' ? null : (el.type === 'number' ? Number(raw) : raw);
+      try {
+        await metaClienteService.update(id, { [field]: val });
+        const idx = state.metas.findIndex((m) => m.id === id);
+        if (idx >= 0) state.metas[idx] = { ...state.metas[idx], [field]: val };
+        toast('Meta salva.');
+      } catch (error) { showError(error); }
+    });
+    if (action === 'meta-new-field') el.addEventListener('change', () => {
+      const cid = el.dataset.cliente;
+      if (!state.metaRowDrafts[cid]) state.metaRowDrafts[cid] = { open: true };
+      state.metaRowDrafts[cid][el.dataset.field] = el.value;
+    });
+    if (action === 'meta-new-save') el.addEventListener('click', async () => {
+      const cid = el.dataset.cliente;
+      const draft = state.metaRowDrafts[cid] || {};
+      if (!draft.objetivo) {
+        toast('Selecione o objetivo antes de salvar.', 'error');
+        return;
+      }
+      const payload = {
+        cliente_id: cid,
+        objetivo: draft.objetivo,
+        meta_custo_resultado: draft.meta_custo_resultado !== '' && draft.meta_custo_resultado != null ? Number(draft.meta_custo_resultado) : null,
+        meta_roas_minimo: draft.meta_roas_minimo !== '' && draft.meta_roas_minimo != null ? Number(draft.meta_roas_minimo) : null,
+        meta_ctr_minimo: draft.meta_ctr_minimo !== '' && draft.meta_ctr_minimo != null ? Number(draft.meta_ctr_minimo) : null,
+        verba_diaria_maxima: draft.verba_diaria_maxima !== '' && draft.verba_diaria_maxima != null ? Number(draft.verba_diaria_maxima) : null,
+        threshold_variacao_pct: draft.threshold_variacao_pct !== '' && draft.threshold_variacao_pct != null ? Number(draft.threshold_variacao_pct) : 30,
+        ativo: true,
+      };
+      try {
+        const nova = await metaClienteService.create(payload);
+        const clienteData = state.clientes.find((c) => c.id === cid);
+        state.metas.push({ ...nova, clientes: clienteData ? { nome_empresa: clienteData.nome_empresa, meta_ads_act: clienteData.meta_ads_act } : null });
+        delete state.metaRowDrafts[cid];
+        render();
+        toast('Meta salva!');
+      } catch (error) { showError(error); }
+    });
+    if (action === 'meta-add-row') el.addEventListener('click', () => {
+      const cid = el.dataset.cliente;
+      state.metaRowDrafts[cid] = { open: true };
+      render();
+    });
+    if (action === 'alerta-to-task') el.addEventListener('click', () => createTaskFromAlerta(el.dataset.id));
+    if (action === 'resolver-alerta') el.addEventListener('click', async () => {
+      try {
+        await alertaAnomaliaService.resolver(el.dataset.id, state.session?.user?.email || 'admin');
+        const idx = state.alertas.findIndex((a) => a.id === el.dataset.id);
+        if (idx >= 0) state.alertas[idx] = { ...state.alertas[idx], status: 'resolvido' };
+        updateAlertasBadge();
+        render();
+        toast('Alerta marcado como resolvido.');
+      } catch (error) { showError(error); }
+    });
+    if (action === 'ignorar-alerta') el.addEventListener('click', async () => {
+      try {
+        await alertaAnomaliaService.ignorar(el.dataset.id);
+        const idx = state.alertas.findIndex((a) => a.id === el.dataset.id);
+        if (idx >= 0) state.alertas[idx] = { ...state.alertas[idx], status: 'ignorado' };
+        updateAlertasBadge();
+        render();
+        toast('Alerta ignorado.');
+      } catch (error) { showError(error); }
+    });
+    if (action === 'alerta-filtro-status') el.addEventListener('click', () => { state.alertasFiltroStatus = el.dataset.val; render(); });
+    if (action === 'alerta-filtro-sev') el.addEventListener('click', () => { state.alertasFiltroSeveridade = el.dataset.val; render(); });
+    if (action === 'run-verificacao') el.addEventListener('click', async () => {
+      el.disabled = true;
+      el.innerHTML = '<i data-lucide="loader-circle"></i>Verificando...';
+      renderLucide();
+      try {
+        const res = await fetch('https://automacao2.themidiamarketing.com.br/webhook/alertas-verificacao', { method: 'POST' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        toast('Verificacao iniciada! Os alertas serao atualizados em instantes.');
+        setTimeout(async () => { await loadAll(); render(); }, 8000);
+      } catch (e) {
+        toast(`Erro ao iniciar verificacao: ${e.message}`, 'error');
+      } finally {
+        el.disabled = false;
+        el.innerHTML = '<i data-lucide="play"></i>Fazer verificacao';
+        renderLucide();
+      }
+    });
+    if (action === 'whatsapp-instance') el.addEventListener('input', () => {
+      state.whatsapp.instanceName = sanitizeInstanceName(el.value);
+      persistWhatsappConfig();
+    });
+    if (action === 'whatsapp-connect') el.addEventListener('click', connectWhatsapp);
+    if (action === 'whatsapp-mark-connected') el.addEventListener('click', () => {
+      state.whatsapp.status = 'ativo';
+      state.whatsapp.updatedAt = new Date().toISOString();
+      persistWhatsappConfig();
+      render();
+      toast('WhatsApp marcado como conectado.');
+    });
+    if (action === 'whatsapp-clear') el.addEventListener('click', () => {
+      state.whatsapp = getDefaultWhatsappConfig();
+      persistWhatsappConfig();
+      render();
+      toast('Conexao do WhatsApp limpa.');
+    });
+  });
+}
+
+function openForm(entity, id = null, defaults = {}) {
+  const current = id ? getEntityList(entity).find((item) => item.id === id) : {};
+  const values = { ...defaults, ...current };
+  const schema = getFormSchema(entity);
+  modalEyebrow.textContent = id ? 'Editar registro' : 'Novo registro';
+  modalTitle.textContent = schema.title;
+  modalForm.innerHTML = `<div class="form-grid">${schema.fields.map((field) => renderField(field, values[field.name])).join('')}<div class="form-actions"><button type="button" class="secondary-button" data-modal-cancel>Cancelar</button><button class="button" type="submit"><i data-lucide="save"></i>Salvar</button></div></div>`;
+  modalBackdrop.hidden = false;
+  modalForm.querySelector('[data-modal-cancel]')?.addEventListener('click', closeModal);
+  modalForm.onsubmit = (event) => handleSubmit(event, entity, id);
+  if (entity === 'relatorios') bindReportCalculations();
+  renderLucide();
+}
+
+function renderField(field, value) {
+  const common = `name="${field.name}" ${field.required ? 'required' : ''}`;
+  const safeValue = escapeHtml(value ?? field.default ?? '');
+  if (field.type === 'select') {
+    const customLabels = Object.fromEntries((field.customLabels || []).map((item) => [item.value, item.label]));
+    return `<label class="${field.full ? 'full' : ''}">${field.label}<select ${common}><option value="">Selecione</option>${field.options.map((opt) => `<option value="${opt}" ${String(value ?? field.default ?? '') === opt ? 'selected' : ''}>${escapeHtml(customLabels[opt] || label(opt))}</option>`).join('')}</select></label>`;
+  }
+  if (field.type === 'textarea') return `<label class="full">${field.label}<textarea ${common}>${safeValue}</textarea></label>`;
+  return `<label class="${field.full ? 'full' : ''}">${field.label}<input class="input" type="${field.type || 'text'}" value="${safeValue}" ${common}></label>`;
+}
+
+async function handleSubmit(event, entity, id) {
+  event.preventDefault();
+  const formData = new FormData(event.target);
+  const payload = Object.fromEntries(formData.entries());
+  getFormSchema(entity).fields.forEach((field) => {
+    if (field.type === 'number') payload[field.name] = payload[field.name] === '' ? null : Number(payload[field.name]);
+    if (field.name === 'revisao_verba_ok') payload[field.name] = payload[field.name] === 'true';
+    if (entity === 'metas' && field.name === 'ativo') payload[field.name] = payload[field.name] === 'true';
+    if (payload[field.name] === '') payload[field.name] = field.required ? payload[field.name] : null;
+  });
+
+  if (entity === 'relatorios') Object.assign(payload, calculateReport(payload));
+  if (entity === 'relatorios' && payload.cliente_id) {
+    payload.meta_ads_act_snapshot = state.clientes.find((cliente) => cliente.id === payload.cliente_id)?.meta_ads_act || null;
+  }
+
+  try {
+    await getService(entity)[id ? 'update' : 'create'](id || payload, payload);
+    closeModal();
+    await loadAll();
+    render();
+    toast('Registro salvo com sucesso.');
+  } catch (error) {
+    showError(error);
+  }
+}
+
+async function handleDelete(entity, id) {
+  if (!confirmDelete(label(entity))) return;
+  try {
+    await getService(entity).delete(id);
+    await loadAll();
+    render();
+    toast('Registro excluido.');
+  } catch (error) {
+    showError(error);
+  }
+}
+
+async function toggleTaskStatus(id, currentStatus) {
+  if (!id) return;
+  const nextStatus = currentStatus === 'concluida' ? 'pendente' : 'concluida';
+  try {
+    await tarefaService.update(id, { status: nextStatus });
+    const index = state.tarefas.findIndex((tarefa) => tarefa.id === id);
+    if (index >= 0) state.tarefas[index] = { ...state.tarefas[index], status: nextStatus };
+    render();
+    toast(nextStatus === 'concluida' ? 'Tarefa concluida.' : 'Tarefa reaberta.');
+  } catch (error) {
+    showError(error);
+  }
+}
+
+// ── Task Detail (ClickUp-style) ─────────────────────────────────────────────
+
+function openTaskDetail(id) {
+  const tarefa = state.tarefas.find((t) => t.id === id);
+  if (!tarefa) return;
+  state.taskDetailId = id;
+  const overlay = document.getElementById('taskDetailOverlay');
+  if (!overlay) return;
+  overlay.innerHTML = buildTaskDetailHTML(tarefa);
+  overlay.hidden = false;
+  renderLucide();
+  bindTaskDetailActions();
+}
+
+function closeTaskDetail() {
+  state.taskDetailId = null;
+  const overlay = document.getElementById('taskDetailOverlay');
+  if (overlay) {
+    overlay.hidden = true;
+    overlay.innerHTML = '';
+  }
+}
+
+function refreshTaskDetail() {
+  if (!state.taskDetailId) return;
+  const tarefa = state.tarefas.find((t) => t.id === state.taskDetailId);
+  if (!tarefa) return;
+  const overlay = document.getElementById('taskDetailOverlay');
+  if (!overlay || overlay.hidden) return;
+  overlay.innerHTML = buildTaskDetailHTML(tarefa);
+  renderLucide();
+  bindTaskDetailActions();
+}
+
+function rerenderTaskRowInPlace(id) {
+  const el = document.querySelector(`[data-task-id="${id}"]`);
+  if (!el) return;
+  const tarefa = state.tarefas.find((t) => t.id === id);
+  if (!tarefa) return;
+  const tmp = document.createElement('div');
+  tmp.innerHTML = renderTaskRow(tarefa);
+  const newRow = tmp.firstElementChild;
+  el.replaceWith(newRow);
+  renderLucide();
+  newRow.querySelectorAll('[data-action]').forEach((btn) => {
+    const action = btn.dataset.action;
+    if (action === 'toggle-task-status') btn.addEventListener('click', () => toggleTaskStatus(btn.dataset.id, btn.dataset.status));
+    if (action === 'open-task-detail')   btn.addEventListener('click', () => openTaskDetail(btn.dataset.id));
+    if (action === 'edit')    btn.addEventListener('click', () => openForm(btn.dataset.entity, btn.dataset.id));
+    if (action === 'delete')  btn.addEventListener('click', () => handleDelete(btn.dataset.entity, btn.dataset.id));
+  });
+}
+
+function buildTaskDetailHTML(tarefa) {
+  const cliente = tarefa.clientes?.nome_empresa || getClienteName(tarefa.cliente_id) || '-';
+  const lists = tarefa.checklists || [];
+  const clTotal = lists.reduce((s, l) => s + (l.items?.length || 0), 0);
+  const clDone  = lists.reduce((s, l) => s + (l.items?.filter((i) => i.done).length || 0), 0);
+  const pct = clTotal > 0 ? Math.round((clDone / clTotal) * 100) : 0;
+
+  const statusLabels = { pendente: 'Pendente', em_andamento: 'Em andamento', concluida: 'Concluída', cancelada: 'Cancelada' };
+  const statusLabel = statusLabels[tarefa.status] || tarefa.status;
+
+  return `
+    <div class="task-detail-panel">
+      <!-- Top bar -->
+      <div class="task-detail-topbar">
+        <div class="task-detail-breadcrumb">
+          <i data-lucide="folder"></i>
+          <span>${escapeHtml(cliente)}</span>
+          <i data-lucide="chevron-right"></i>
+          <span>Tarefas</span>
+        </div>
+        <div class="task-detail-topbar-actions">
+          <button class="icon-button" data-td-action="edit" data-entity="tarefas" data-id="${tarefa.id}" title="Editar"><i data-lucide="pencil"></i></button>
+          <button class="icon-button" data-td-action="delete" data-entity="tarefas" data-id="${tarefa.id}" title="Excluir"><i data-lucide="trash-2"></i></button>
+          <button class="icon-button" data-td-action="close" title="Fechar (Esc)"><i data-lucide="x"></i></button>
+        </div>
+      </div>
+
+      <!-- Body -->
+      <div class="task-detail-content">
+        <!-- Left: main content -->
+        <div class="task-detail-main">
+
+          <!-- Status / priority / dates row -->
+          <div class="task-detail-meta-row">
+            <div class="task-status-wrap">
+              <button class="task-status-select-btn status-${escapeHtml(tarefa.status)}" data-td-action="open-status-menu" data-id="${tarefa.id}">
+                ${escapeHtml(statusLabel)} <i data-lucide="chevron-down"></i>
+              </button>
+            </div>
+            ${taskPriorityPill(tarefa.prioridade)}
+            <span class="task-detail-date-range">
+              <i data-lucide="calendar-range"></i>
+              <input type="date" data-td-field="data_inicio"     data-id="${tarefa.id}" value="${escapeHtml(tarefa.data_inicio || '')}"     title="Início">
+              <i data-lucide="arrow-right"></i>
+              <input type="date" data-td-field="data_vencimento" data-id="${tarefa.id}" value="${escapeHtml(tarefa.data_vencimento || '')}" title="Vencimento">
+            </span>
+          </div>
+
+          <!-- Title -->
+          <textarea class="task-detail-title" rows="2" data-td-field="titulo" data-id="${tarefa.id}">${escapeHtml(tarefa.titulo)}</textarea>
+
+          <!-- Properties -->
+          <div class="task-detail-props">
+            <div class="task-detail-prop-row">
+              <span class="task-detail-prop-label"><i data-lucide="user"></i>Responsável</span>
+              <div class="task-detail-prop-value">
+                ${tarefa.responsavel ? taskAssignee(tarefa.responsavel) : '<span style="color:var(--muted);font-size:13px">Nenhum</span>'}
+              </div>
+            </div>
+            <div class="task-detail-prop-row">
+              <span class="task-detail-prop-label"><i data-lucide="building-2"></i>Cliente</span>
+              <div class="task-detail-prop-value">
+                <span class="task-client-pill">${escapeHtml(cliente)}</span>
+              </div>
+            </div>
+            <div class="task-detail-prop-row">
+              <span class="task-detail-prop-label"><i data-lucide="flag"></i>Prioridade</span>
+              <div class="task-detail-prop-value">${taskPriorityPill(tarefa.prioridade)}</div>
+            </div>
+          </div>
+
+          <!-- Description -->
+          <div>
+            <div class="task-detail-section-title">Descrição / Objetivos</div>
+            <textarea class="task-detail-textarea" data-td-field="descricao" data-id="${tarefa.id}" placeholder="Descreva os objetivos desta tarefa...">${escapeHtml(tarefa.descricao || '')}</textarea>
+          </div>
+
+          <!-- Checklists -->
+          <div id="td-checklists">
+            <div class="task-detail-section-title" style="margin-bottom:12px">Checklists</div>
+            ${lists.map((list, li) => buildChecklistSection(list, li, tarefa.id)).join('')}
+            <button class="task-add-checklist-btn" data-td-action="add-checklist" data-id="${tarefa.id}">
+              <i data-lucide="plus"></i> Adicionar checklist
+            </button>
+          </div>
+        </div>
+
+        <!-- Right: sidebar -->
+        <div class="task-detail-sidebar">
+          <div>
+            <div class="task-detail-sidebar-title">Detalhes</div>
+            <div class="task-detail-meta-list">
+              <div><strong>Criado:</strong> ${date(tarefa.created_at)}</div>
+              <div><strong>Atualizado:</strong> ${date(tarefa.updated_at)}</div>
+              ${tarefa.data_inicio ? `<div><strong>Início:</strong> ${date(tarefa.data_inicio)}</div>` : ''}
+              ${tarefa.data_vencimento ? `<div><strong>Vencimento:</strong> ${date(tarefa.data_vencimento)}</div>` : ''}
+              ${clTotal > 0 ? `
+              <div>
+                <strong>Progresso:</strong> ${clDone}/${clTotal} itens (${pct}%)
+                <div class="task-detail-overall-progress">
+                  <div class="task-detail-overall-progress-fill" style="width:${pct}%"></div>
+                </div>
+              </div>` : ''}
+            </div>
+          </div>
+
+          <div>
+            <div class="task-detail-sidebar-title">Atividade</div>
+            <div class="task-detail-activity-item">
+              <div class="task-detail-activity-avatar">TM</div>
+              <div class="task-detail-activity-body">
+                Tarefa criada
+                <div class="task-detail-activity-time">${date(tarefa.created_at)}</div>
+              </div>
+            </div>
+            ${tarefa.concluida_em ? `
+            <div class="task-detail-activity-item">
+              <div class="task-detail-activity-avatar" style="background:var(--green)"><i data-lucide="check" style="width:12px;height:12px"></i></div>
+              <div class="task-detail-activity-body">
+                Tarefa concluída
+                <div class="task-detail-activity-time">${date(tarefa.concluida_em)}</div>
+              </div>
+            </div>` : ''}
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function buildChecklistSection(list, li, tarefaId) {
+  const items = list.items || [];
+  const done  = items.filter((i) => i.done).length;
+  const total = items.length;
+  const pct   = total > 0 ? Math.round((done / total) * 100) : 0;
+  return `
+    <div class="task-checklist">
+      <div class="task-checklist-head">
+        <div class="task-checklist-title-row">
+          <input class="task-checklist-name" type="text" value="${escapeHtml(list.title || 'Checklist')}" data-td-action="rename-checklist" data-id="${tarefaId}" data-li="${li}" placeholder="Nome">
+          <span class="task-checklist-count">${done} de ${total}</span>
+          <div class="task-checklist-progress-bar">
+            <div class="task-checklist-progress-fill${pct === 100 ? ' complete' : ''}" style="width:${pct}%"></div>
+          </div>
+        </div>
+        <button class="task-checklist-del-btn" data-td-action="delete-checklist" data-id="${tarefaId}" data-li="${li}" title="Remover checklist">
+          <i data-lucide="trash-2"></i>
+        </button>
+      </div>
+      <div class="task-checklist-items">
+        ${items.map((item, ii) => buildChecklistItem(item, li, ii, tarefaId)).join('')}
+      </div>
+      <div class="task-checklist-add-item-row">
+        <button class="task-checklist-add-item-btn" data-td-action="add-checklist-item" data-id="${tarefaId}" data-li="${li}">
+          <i data-lucide="plus"></i> Adicionar item
+        </button>
+      </div>
+    </div>
+  `;
+}
+
+function buildChecklistItem(item, li, ii, tarefaId) {
+  return `
+    <div class="task-checklist-item">
+      <input type="checkbox" ${item.done ? 'checked' : ''} data-td-action="toggle-checklist-item" data-id="${tarefaId}" data-li="${li}" data-ii="${ii}" aria-label="Marcar item">
+      <input type="text" class="task-checklist-item-text${item.done ? ' is-done' : ''}" value="${escapeHtml(item.text || '')}" data-td-action="rename-checklist-item" data-id="${tarefaId}" data-li="${li}" data-ii="${ii}" placeholder="Item...">
+      <button class="task-checklist-item-del" data-td-action="delete-checklist-item" data-id="${tarefaId}" data-li="${li}" data-ii="${ii}" title="Remover">✕</button>
+    </div>
+  `;
+}
+
+function bindTaskDetailActions() {
+  const overlay = document.getElementById('taskDetailOverlay');
+  if (!overlay) return;
+
+  // Close on backdrop click (clicking the dark area outside the panel)
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) closeTaskDetail();
+  });
+
+  // Keyboard Esc
+  const onEsc = (e) => { if (e.key === 'Escape') { closeTaskDetail(); document.removeEventListener('keydown', onEsc); } };
+  document.addEventListener('keydown', onEsc);
+
+  overlay.querySelectorAll('[data-td-action]').forEach((el) => {
+    const action = el.dataset.tdAction;
+
+    if (action === 'close') el.addEventListener('click', closeTaskDetail);
+
+    if (action === 'edit') el.addEventListener('click', () => { closeTaskDetail(); openForm(el.dataset.entity, el.dataset.id); });
+    if (action === 'delete') el.addEventListener('click', () => { closeTaskDetail(); handleDelete(el.dataset.entity, el.dataset.id); });
+
+    // Status dropdown
+    if (action === 'open-status-menu') el.addEventListener('click', () => openStatusMenu(el));
+
+    // Inline field save (blur)
+    if (el.dataset.tdField) {
+      el.addEventListener('blur', () => saveTaskField(el.dataset.id, el.dataset.tdField, el.value));
+      if (el.type === 'date') el.addEventListener('change', () => saveTaskField(el.dataset.id, el.dataset.tdField, el.value));
+    }
+
+    // Checklist actions
+    if (action === 'add-checklist')       el.addEventListener('click', () => addChecklist(el.dataset.id));
+    if (action === 'delete-checklist')    el.addEventListener('click', () => deleteChecklist(el.dataset.id, +el.dataset.li));
+    if (action === 'rename-checklist')    el.addEventListener('blur',  () => renameChecklist(el.dataset.id, +el.dataset.li, el.value));
+    if (action === 'add-checklist-item')  el.addEventListener('click', () => addChecklistItem(el.dataset.id, +el.dataset.li));
+    if (action === 'toggle-checklist-item') el.addEventListener('change', () => toggleChecklistItem(el.dataset.id, +el.dataset.li, +el.dataset.ii, el.checked));
+    if (action === 'rename-checklist-item') el.addEventListener('blur', () => renameChecklistItem(el.dataset.id, +el.dataset.li, +el.dataset.ii, el.value));
+    if (action === 'delete-checklist-item') el.addEventListener('click', () => deleteChecklistItem(el.dataset.id, +el.dataset.li, +el.dataset.ii));
+  });
+}
+
+function openStatusMenu(btn) {
+  // Remove any existing dropdown
+  document.querySelector('.task-status-dropdown')?.remove();
+  const statuses = [
+    { value: 'pendente',     label: 'Pendente' },
+    { value: 'em_andamento', label: 'Em andamento' },
+    { value: 'concluida',    label: 'Concluída' },
+    { value: 'cancelada',    label: 'Cancelada' },
+  ];
+  const menu = document.createElement('div');
+  menu.className = 'task-status-dropdown';
+  menu.innerHTML = statuses.map((s) => `
+    <button class="task-status-dropdown-item" data-value="${s.value}">
+      <span class="task-status-dropdown-dot status-dot-${s.value}"></span> ${s.label}
+    </button>
+  `).join('');
+  btn.parentElement.appendChild(menu);
+  menu.querySelectorAll('button').forEach((item) => {
+    item.addEventListener('click', async () => {
+      menu.remove();
+      const newStatus = item.dataset.value;
+      const id = btn.dataset.id;
+      try {
+        await tarefaService.update(id, { status: newStatus });
+        const idx = state.tarefas.findIndex((t) => t.id === id);
+        if (idx >= 0) state.tarefas[idx] = { ...state.tarefas[idx], status: newStatus };
+        refreshTaskDetail();
+        rerenderTaskRowInPlace(id);
+        toast(`Status: ${item.textContent.trim()}`);
+      } catch (e) { showError(e); }
+    });
+  });
+  // Close on outside click
+  setTimeout(() => document.addEventListener('click', () => menu.remove(), { once: true }), 50);
+}
+
+async function saveTaskField(id, field, value) {
+  try {
+    const payload = { [field]: value || null };
+    await tarefaService.update(id, payload);
+    const idx = state.tarefas.findIndex((t) => t.id === id);
+    if (idx >= 0) state.tarefas[idx] = { ...state.tarefas[idx], [field]: value || null };
+    rerenderTaskRowInPlace(id);
+  } catch (e) { showError(e); }
+}
+
+// ── Checklist helpers ────────────────────────────────────────────────────────
+
+function getTaskChecklists(id) {
+  const t = state.tarefas.find((t) => t.id === id);
+  return JSON.parse(JSON.stringify(t?.checklists || []));
+}
+
+async function saveChecklists(id, checklists) {
+  try {
+    await tarefaService.update(id, { checklists });
+    const idx = state.tarefas.findIndex((t) => t.id === id);
+    if (idx >= 0) state.tarefas[idx] = { ...state.tarefas[idx], checklists };
+    refreshTaskDetail();
+    rerenderTaskRowInPlace(id);
+  } catch (e) { showError(e); }
+}
+
+async function addChecklist(id) {
+  const lists = getTaskChecklists(id);
+  lists.push({ title: 'Nova lista', items: [] });
+  await saveChecklists(id, lists);
+}
+
+async function deleteChecklist(id, li) {
+  if (!confirm('Remover este checklist?')) return;
+  const lists = getTaskChecklists(id);
+  lists.splice(li, 1);
+  await saveChecklists(id, lists);
+}
+
+async function renameChecklist(id, li, title) {
+  const lists = getTaskChecklists(id);
+  if (!lists[li] || lists[li].title === title) return;
+  lists[li].title = title;
+  await saveChecklists(id, lists);
+}
+
+async function addChecklistItem(id, li) {
+  const lists = getTaskChecklists(id);
+  if (!lists[li]) return;
+  if (!lists[li].items) lists[li].items = [];
+  lists[li].items.push({ text: 'Novo item', done: false });
+  await saveChecklists(id, lists);
+}
+
+async function toggleChecklistItem(id, li, ii, done) {
+  const lists = getTaskChecklists(id);
+  if (!lists[li]?.items?.[ii]) return;
+  lists[li].items[ii].done = done;
+  await saveChecklists(id, lists);
+}
+
+async function renameChecklistItem(id, li, ii, text) {
+  const lists = getTaskChecklists(id);
+  if (!lists[li]?.items?.[ii]) return;
+  if (lists[li].items[ii].text === text.trim()) return;
+  lists[li].items[ii].text = text.trim();
+  await saveChecklists(id, lists);
+}
+
+async function deleteChecklistItem(id, li, ii) {
+  const lists = getTaskChecklists(id);
+  if (!lists[li]?.items) return;
+  lists[li].items.splice(ii, 1);
+  await saveChecklists(id, lists);
+}
+
+async function moveLead(id, etapa) {
+  try {
+    await leadCrmService.moveStage(id, etapa);
+    await loadAll();
+    render();
+  } catch (error) {
+    showError(error);
+  }
+}
+
+async function convertLead(id) {
+  const lead = state.leads.find((item) => item.id === id);
+  if (!lead) return;
+  try {
+    const cliente = await clienteService.create({
+      nome_empresa: lead.nome_empresa,
+      responsavel: lead.responsavel,
+      whatsapp: lead.whatsapp,
+      email: lead.email,
+      instagram: lead.instagram,
+      segmento: lead.nicho,
+      cidade: lead.cidade,
+      estado: lead.estado,
+      status: 'ativo',
+      valor_mensal: lead.investimento_disponivel,
+      observacoes: lead.observacoes,
+    });
+    await loadAll();
+    state.detailClienteId = cliente.id;
+    state.detailTab = 'onboarding';
+    render();
+    toast('Lead transformado em cliente.');
+  } catch (error) {
+    showError(error);
+  }
+}
+
+async function updateOnboarding(id, payload) {
+  try {
+    await onboardingService.update(id, payload);
+    toast('Checklist atualizado.');
+  } catch (error) {
+    showError(error);
+  }
+}
+
+async function saveDiaryField(clienteId, id, patch) {
+  try {
+    const diary = await upsertDiaryEntry(clienteId, id, patch);
+    const index = state.diarios.findIndex((item) => item.id === diary.id);
+    if (index >= 0) state.diarios[index] = { ...state.diarios[index], ...diary };
+    else state.diarios.push(diary);
+  } catch (error) {
+    if (isMissingDiaryTableError(error)) {
+      state.diarioMissingTable = true;
+      render();
+      toast('Execute a migration do Diario de Bordo no Supabase para salvar.', 'error');
+      return;
+    }
+    showError(error);
+  }
+}
+
+async function upsertDiaryEntry(clienteId, id, patch = {}) {
+  const selectedDate = state.diarioDate || isoDate(new Date());
+  const current = id ? state.diarios.find((item) => item.id === id) : state.diarios.find((item) => item.cliente_id === clienteId && item.data_registro === selectedDate);
+  const draft = getDiaryDraftFromDom(clienteId);
+  const payload = {
+    cliente_id: clienteId || null,
+    data_registro: selectedDate,
+    autor: current?.autor || draft.autor || 'Nicolas',
+    revisao_verba_ok: draft.revisao_verba_ok,
+    anotacoes: draft.anotacoes || '',
+    comentario_admin: draft.comentario_admin || null,
+    tags: current?.tags || null,
+    status: current?.status || 'aberto',
+    ...patch,
+  };
+  if (current?.id) return diarioBordoService.update(current.id, payload);
+  return diarioBordoService.create(payload);
+}
+
+function getDiaryDraftFromDom(clienteId) {
+  const fieldSelector = (field) => `[data-action="diary-field"][data-client="${clienteId}"][data-field="${field}"]`;
+  const okSelector = `[data-action="diary-ok"][data-client="${clienteId}"]`;
+  return {
+    autor: 'Nicolas',
+    anotacoes: document.querySelector(fieldSelector('anotacoes'))?.value || '',
+    comentario_admin: document.querySelector(fieldSelector('comentario_admin'))?.value || '',
+    revisao_verba_ok: document.querySelector(okSelector)?.checked ?? false,
+  };
+}
+
+async function createTaskFromDiary(id, clienteId) {
+  const diary = id ? state.diarios.find((item) => item.id === id) : await upsertDiaryEntry(clienteId, id);
+  if (!diary) return;
+  const clienteName = diary.clientes?.nome_empresa || getClienteName(diary.cliente_id);
+  const firstLine = (diary.anotacoes || '').split('\n').find(Boolean) || 'Acompanhar anotacao do diario';
+  try {
+    await tarefaService.create({
+      cliente_id: diary.cliente_id || null,
+      titulo: `${clienteName ? `${clienteName}: ` : ''}${firstLine.slice(0, 110)}`,
+      descricao: [
+        `Origem: Diario de bordo de ${date(diary.data_registro)}`,
+        diary.anotacoes || '',
+        diary.comentario_admin ? `Comentario interno: ${diary.comentario_admin}` : '',
+      ].filter(Boolean).join('\n\n'),
+      responsavel: diary.autor || null,
+      prioridade: 'media',
+      status: 'pendente',
+      data_vencimento: isoDate(new Date()),
+    });
+    await diarioBordoService.update(diary.id, { status: 'tarefa_criada' });
+    await loadAll();
+    render();
+    toast('Tarefa criada a partir do diario.');
+  } catch (error) {
+    if (isMissingDiaryTableError(error)) {
+      state.diarioMissingTable = true;
+      render();
+      toast('Execute a migration do Diario de Bordo no Supabase para criar tarefas a partir dele.', 'error');
+      return;
+    }
+    showError(error);
+  }
+}
+
+function createTaskFromAlerta(alertaId) {
+  const alerta = state.alertas.find((a) => a.id === alertaId);
+  if (!alerta) return;
+
+  const metricaLabel = { cpl: 'CPL', ctr: 'CTR', roas: 'ROAS', spend: 'Gasto diario' };
+  const isMonetary = ['cpl', 'spend'].includes(alerta.metrica);
+  const fmtV = (v) => v == null ? '—' : isMonetary ? money(v) : (alerta.metrica === 'ctr' ? `${Number(v).toFixed(2)}%` : `${Number(v).toFixed(2)}x`);
+  const clienteName = alerta.clientes?.nome_empresa || alerta.nome_cliente || '';
+  const metaRec = state.metas.find((m) => m.id === alerta.meta_id);
+  const goalMap = { cpl: metaRec?.meta_custo_resultado, roas: metaRec?.meta_roas_minimo, ctr: metaRec?.meta_ctr_minimo, spend: metaRec?.verba_diaria_maxima };
+  const goal = goalMap[alerta.metrica];
+  const v1 = alerta.valor_1d ?? alerta.valor_atual;
+  const sevToPrority = { critica: 'urgente', alta: 'alta', media: 'media' };
+
+  const defaultTitle = `${clienteName ? `${clienteName} — ` : ''}${metricaLabel[alerta.metrica] || alerta.metrica} fora da meta (hoje: ${fmtV(v1)}${goal != null ? `, meta: ${fmtV(goal)}` : ''})`;
+  const defaultDesc = [
+    `Alerta gerado automaticamente em ${date(alerta.created_at)}.`,
+    `Metrica: ${metricaLabel[alerta.metrica] || alerta.metrica}`,
+    `Hoje: ${fmtV(v1)}`,
+    alerta.valor_3d != null ? `Ultimos 3d: ${fmtV(alerta.valor_3d)}` : null,
+    alerta.valor_referencia != null ? `Ultimos 7d: ${fmtV(alerta.valor_referencia)}` : null,
+    goal != null ? `Meta configurada: ${fmtV(goal)}` : null,
+    `Severidade: ${alerta.severidade}`,
+  ].filter(Boolean).join('\n');
+
+  const tomorrow = isoDate(new Date(Date.now() + 86400000));
+  const prioridade = sevToPrority[alerta.severidade] || 'media';
+
+  const equipeOptions = state.equipe.filter((m) => m.status === 'ativo').map((m) => `<option value="${escapeHtml(m.nome)}">${escapeHtml(m.nome)}${m.cargo ? ` — ${escapeHtml(m.cargo)}` : ''}</option>`).join('');
+
+  modalEyebrow.textContent = 'A partir do alerta';
+  modalTitle.textContent = 'Criar tarefa';
+  modalForm.innerHTML = `
+    <div class="form-grid">
+      <label class="full">Titulo<input class="input" type="text" name="titulo" value="${escapeHtml(defaultTitle)}" required></label>
+      <label>Responsavel<select name="responsavel"><option value="">Nao atribuido</option>${equipeOptions}</select></label>
+      <label>Prioridade<select name="prioridade"><option value="baixa" ${prioridade==='baixa'?'selected':''}>Baixa</option><option value="media" ${prioridade==='media'?'selected':''}>Media</option><option value="alta" ${prioridade==='alta'?'selected':''}>Alta</option><option value="urgente" ${prioridade==='urgente'?'selected':''}>Urgente</option></select></label>
+      <label>Data de vencimento<input class="input" type="date" name="data_vencimento" value="${tomorrow}"></label>
+      <label class="full">Descricao<textarea name="descricao">${escapeHtml(defaultDesc)}</textarea></label>
+      <div class="form-actions"><button type="button" class="secondary-button" data-modal-cancel>Cancelar</button><button class="button" type="submit"><i data-lucide="clipboard-list"></i>Criar tarefa</button></div>
+    </div>
+  `;
+  modalBackdrop.hidden = false;
+  modalForm.querySelector('[data-modal-cancel]')?.addEventListener('click', closeModal);
+  modalForm.onsubmit = async (event) => {
+    event.preventDefault();
+    const fd = new FormData(event.target);
+    try {
+      await tarefaService.create({
+        cliente_id: alerta.cliente_id || null,
+        titulo: fd.get('titulo'),
+        descricao: fd.get('descricao') || null,
+        responsavel: fd.get('responsavel') || null,
+        prioridade: fd.get('prioridade') || 'media',
+        status: 'pendente',
+        data_vencimento: fd.get('data_vencimento') || null,
+      });
+      closeModal();
+      await loadAll();
+      render();
+      toast('Tarefa criada a partir do alerta!');
+    } catch (error) { showError(error); }
+  };
+  renderLucide();
+}
+
+async function createObservationFromDiary(id, clienteId) {
+  const diary = id ? state.diarios.find((item) => item.id === id) : await upsertDiaryEntry(clienteId, id);
+  if (!diary) return;
+  if (!diary.cliente_id) {
+    toast('Vincule um cliente antes de salvar como observacao.', 'error');
+    return;
+  }
+  try {
+    await observacaoClienteService.create({
+      cliente_id: diary.cliente_id,
+      autor: state.session?.user?.email || diary.autor || null,
+      tipo: 'estrategia',
+      observacao: [
+        `Diario de bordo - ${date(diary.data_registro)}`,
+        diary.anotacoes || '',
+        diary.comentario_admin ? `Comentario interno: ${diary.comentario_admin}` : '',
+      ].filter(Boolean).join('\n\n'),
+    });
+    await diarioBordoService.update(diary.id, { status: diary.status === 'tarefa_criada' ? 'tarefa_criada' : 'comentado' });
+    await loadAll();
+    render();
+    toast('Observacao salva no cliente.');
+  } catch (error) {
+    if (isMissingDiaryTableError(error)) {
+      state.diarioMissingTable = true;
+      render();
+      toast('Execute a migration do Diario de Bordo no Supabase para salvar observacoes.', 'error');
+      return;
+    }
+    showError(error);
+  }
+}
+
+function bindReportCalculations() {
+  const fields = ['investimento', 'impressoes', 'cliques', 'leads', 'mensagens', 'faturamento_informado'];
+  fields.forEach((field) => modalForm.querySelector(`[name="${field}"]`)?.addEventListener('input', () => {
+    const payload = Object.fromEntries(new FormData(modalForm).entries());
+    const calculated = calculateReport(payload);
+    ['ctr', 'cpc', 'custo_por_lead', 'custo_por_mensagem', 'roas'].forEach((key) => {
+      const input = modalForm.querySelector(`[name="${key}"]`);
+      if (input) input.value = calculated[key];
+    });
+  }));
+}
+
+function calculateReport(payload) {
+  const investimento = Number(payload.investimento || 0);
+  const impressoes = Number(payload.impressoes || 0);
+  const cliques = Number(payload.cliques || 0);
+  const leads = Number(payload.leads || 0);
+  const mensagens = Number(payload.mensagens || 0);
+  const faturamento = Number(payload.faturamento_informado || 0);
+  return {
+    ctr: impressoes ? Number(((cliques / impressoes) * 100).toFixed(4)) : 0,
+    cpc: cliques ? Number((investimento / cliques).toFixed(2)) : 0,
+    custo_por_lead: leads ? Number((investimento / leads).toFixed(2)) : 0,
+    custo_por_mensagem: mensagens ? Number((investimento / mensagens).toFixed(2)) : 0,
+    roas: investimento ? Number((faturamento / investimento).toFixed(4)) : 0,
+  };
+}
+
+function getFormSchema(entity) {
+  const clienteOptions = state.clientes.map((cliente) => ({ value: cliente.id, label: cliente.nome_empresa }));
+  const clientSelect = { name: 'cliente_id', label: 'Cliente', type: 'select', options: clienteOptions.map((c) => c.value), customLabels: clienteOptions };
+  const schemas = {
+    clientes: {
+      title: 'Cliente',
+      fields: [
+        { name: 'nome_empresa', label: 'Nome da empresa', required: true },
+        { name: 'responsavel', label: 'Responsavel' },
+        { name: 'whatsapp', label: 'WhatsApp' },
+        { name: 'email', label: 'Email', type: 'email' },
+        { name: 'segmento', label: 'Segmento' },
+        { name: 'cidade', label: 'Cidade' },
+        { name: 'estado', label: 'Estado' },
+        { name: 'status', label: 'Status', type: 'select', options: ['ativo', 'pausado', 'cancelado', 'prospect'], default: 'ativo' },
+        { name: 'plano_contratado', label: 'Plano contratado', type: 'select', options: ['starter', 'growth', 'premium', 'personalizado'] },
+        { name: 'valor_mensal', label: 'Valor mensal', type: 'number' },
+        { name: 'data_entrada', label: 'Data de entrada', type: 'date' },
+        { name: 'data_renovacao', label: 'Data de renovacao', type: 'date' },
+        { name: 'verba_mensal_trafego', label: 'Verba mensal de trafego', type: 'number' },
+        { name: 'meta_ads_act', label: 'Meta Ads act' },
+        { name: 'google_ads_id', label: 'Google Ads ID' },
+        { name: 'instagram', label: 'Instagram' },
+        { name: 'site', label: 'Site' },
+        { name: 'landing_page', label: 'Landing page' },
+        { name: 'crm_utilizado', label: 'CRM utilizado' },
+        { name: 'responsavel_interno', label: 'Responsavel interno' },
+        { name: 'observacoes', label: 'Observacoes', type: 'textarea' },
+      ],
+    },
+    crm: {
+      title: 'Lead CRM',
+      fields: [
+        { name: 'nome_empresa', label: 'Nome da empresa', required: true },
+        { name: 'responsavel', label: 'Responsavel' },
+        { name: 'whatsapp', label: 'WhatsApp' },
+        { name: 'email', label: 'Email', type: 'email' },
+        { name: 'instagram', label: 'Instagram' },
+        { name: 'nicho', label: 'Nicho' },
+        { name: 'cidade', label: 'Cidade' },
+        { name: 'estado', label: 'Estado' },
+        { name: 'origem_lead', label: 'Origem do lead' },
+        { name: 'etapa', label: 'Etapa', type: 'select', options: crmStages, default: 'lead_novo' },
+        { name: 'potencial', label: 'Potencial', type: 'select', options: ['baixo', 'medio', 'alto'] },
+        { name: 'ticket_medio', label: 'Ticket medio', type: 'number' },
+        { name: 'investimento_disponivel', label: 'Investimento disponivel', type: 'number' },
+        { name: 'data_proximo_contato', label: 'Data proximo contato', type: 'date' },
+        { name: 'proxima_acao', label: 'Proxima acao' },
+        { name: 'dor_principal', label: 'Dor principal', type: 'textarea' },
+        { name: 'motivo_perda', label: 'Motivo da perda', type: 'textarea' },
+        { name: 'observacoes', label: 'Observacoes', type: 'textarea' },
+      ],
+    },
+    campanhas: {
+      title: 'Campanha',
+      fields: [
+        clientSelect,
+        { name: 'plataforma', label: 'Plataforma', type: 'select', options: ['meta_ads', 'google_ads', 'tiktok_ads', 'linkedin_ads', 'outro'], required: true },
+        { name: 'nome_campanha', label: 'Nome da campanha', required: true },
+        { name: 'objetivo', label: 'Objetivo' },
+        { name: 'verba_diaria', label: 'Verba diaria', type: 'number' },
+        { name: 'verba_mensal', label: 'Verba mensal', type: 'number' },
+        { name: 'data_inicio', label: 'Data inicio', type: 'date' },
+        { name: 'data_fim', label: 'Data fim', type: 'date' },
+        { name: 'status', label: 'Status', type: 'select', options: ['ativa', 'pausada', 'encerrada', 'teste'], default: 'ativa' },
+        { name: 'criativos_utilizados', label: 'Criativos utilizados', type: 'textarea' },
+        { name: 'publico', label: 'Publico', type: 'textarea' },
+        { name: 'observacoes_otimizacao', label: 'Observacoes de otimizacao', type: 'textarea' },
+      ],
+    },
+    relatorios: {
+      title: 'Relatorio',
+      fields: [
+        clientSelect,
+        { name: 'periodo_inicio', label: 'Periodo inicio', type: 'date', required: true },
+        { name: 'periodo_fim', label: 'Periodo fim', type: 'date', required: true },
+        { name: 'investimento', label: 'Investimento', type: 'number', default: 0 },
+        { name: 'impressoes', label: 'Impressoes', type: 'number', default: 0 },
+        { name: 'alcance', label: 'Alcance', type: 'number', default: 0 },
+        { name: 'cliques', label: 'Cliques', type: 'number', default: 0 },
+        { name: 'ctr', label: 'CTR calculado', type: 'number', default: 0 },
+        { name: 'cpc', label: 'CPC calculado', type: 'number', default: 0 },
+        { name: 'leads', label: 'Leads', type: 'number', default: 0 },
+        { name: 'custo_por_lead', label: 'Custo por lead', type: 'number', default: 0 },
+        { name: 'mensagens', label: 'Mensagens', type: 'number', default: 0 },
+        { name: 'custo_por_mensagem', label: 'Custo por mensagem', type: 'number', default: 0 },
+        { name: 'vendas', label: 'Vendas', type: 'number', default: 0 },
+        { name: 'faturamento_informado', label: 'Faturamento informado', type: 'number', default: 0 },
+        { name: 'roas', label: 'ROAS calculado', type: 'number', default: 0 },
+        { name: 'analise_estrategica', label: 'Analise estrategica', type: 'textarea' },
+        { name: 'proximos_passos', label: 'Proximos passos', type: 'textarea' },
+      ],
+    },
+    tarefas: {
+      title: 'Tarefa',
+      fields: [
+        clientSelect,
+        { name: 'titulo', label: 'Titulo', required: true },
+        { name: 'responsavel', label: 'Responsavel' },
+        { name: 'prioridade', label: 'Prioridade', type: 'select', options: ['baixa', 'media', 'alta', 'urgente'], default: 'media' },
+        { name: 'status', label: 'Status', type: 'select', options: ['pendente', 'em_andamento', 'concluida', 'cancelada'], default: 'pendente' },
+        { name: 'data_inicio', label: 'Data de inicio', type: 'date' },
+        { name: 'data_vencimento', label: 'Data de vencimento', type: 'date' },
+        { name: 'descricao', label: 'Descricao', type: 'textarea' },
+      ],
+    },
+    diario: {
+      title: 'Diario de bordo',
+      fields: [
+        { name: 'data_registro', label: 'Data', type: 'date', required: true, default: isoDate(new Date()) },
+        clientSelect,
+        { name: 'autor', label: 'Autor', default: state.session?.user?.email || 'Nicolas' },
+        { name: 'revisao_verba_ok', label: 'Revisao de verba e performance', type: 'select', options: ['true', 'false'], customLabels: [{ value: 'true', label: 'OK' }, { value: 'false', label: 'Nao marcada' }], default: 'false' },
+        { name: 'status', label: 'Status', type: 'select', options: ['aberto', 'comentado', 'tarefa_criada', 'resolvido'], default: 'aberto' },
+        { name: 'tags', label: 'Marcadores' },
+        { name: 'anotacoes', label: 'Anotacoes do gestor', type: 'textarea', required: true },
+        { name: 'comentario_admin', label: 'Comentario interno', type: 'textarea' },
+      ],
+    },
+    equipe: {
+      title: 'Membro da equipe',
+      fields: [
+        { name: 'nome', label: 'Nome', required: true },
+        { name: 'email', label: 'Email', type: 'email' },
+        { name: 'cargo', label: 'Cargo' },
+        { name: 'status', label: 'Status', type: 'select', options: ['ativo', 'inativo'], default: 'ativo' },
+      ],
+    },
+    ativos: {
+      title: 'Ativo do cliente',
+      fields: [
+        clientSelect,
+        { name: 'tipo', label: 'Tipo', type: 'select', options: ['logo', 'criativo', 'video', 'copy', 'landing_page', 'documento', 'referencia', 'outro'] },
+        { name: 'titulo', label: 'Titulo', required: true },
+        { name: 'url', label: 'URL' },
+        { name: 'descricao', label: 'Descricao', type: 'textarea' },
+      ],
+    },
+    observacoes: {
+      title: 'Observacao do cliente',
+      fields: [
+        clientSelect,
+        { name: 'autor', label: 'Autor' },
+        { name: 'tipo', label: 'Tipo', type: 'select', options: ['geral', 'reuniao', 'estrategia', 'problema', 'financeiro', 'resultado'], default: 'geral' },
+        { name: 'observacao', label: 'Observacao', type: 'textarea', required: true },
+      ],
+    },
+    metas: {
+      title: 'Meta de performance',
+      fields: [
+        clientSelect,
+        { name: 'objetivo', label: 'Objetivo principal', type: 'select', options: ['mensagens', 'leads', 'vendas', 'seguidores'], required: true },
+        { name: 'meta_custo_resultado', label: 'Meta custo por resultado (R$)', type: 'number', full: false },
+        { name: 'meta_roas_minimo', label: 'ROAS mínimo', type: 'number', full: false },
+        { name: 'meta_ctr_minimo', label: 'CTR mínimo (%)', type: 'number', full: false },
+        { name: 'verba_diaria_maxima', label: 'Verba diária máxima (R$)', type: 'number', full: false },
+        { name: 'threshold_variacao_pct', label: 'Alerta se variar mais de (%) vs 7 dias', type: 'number', default: '30' },
+        { name: 'ativo', label: 'Status', type: 'select', options: ['true', 'false'], customLabels: [{ value: 'true', label: 'Ativo' }, { value: 'false', label: 'Pausado' }], default: 'true' },
+        { name: 'observacoes', label: 'Observacoes', type: 'textarea' },
+      ],
+    },
+  };
+  return schemas[entity];
+}
+
+function closeModal() {
+  modalBackdrop.hidden = true;
+  modalForm.innerHTML = '';
+  modalForm.onsubmit = null;
+}
+
+function getService(entity) {
+  return {
+    ...services,
+    ativos: ativoClienteService,
+    observacoes: observacaoClienteService,
+    diario: diarioBordoService,
+    metas: metaClienteService,
+  }[entity];
+}
+
+function getEntityList(entity) {
+  return {
+    clientes: state.clientes,
+    crm: state.leads,
+    campanhas: state.campanhas,
+    relatorios: state.relatorios,
+    tarefas: state.tarefas,
+    diario: state.diarios,
+    equipe: state.equipe,
+    ativos: [],
+    observacoes: [],
+    metas: state.metas,
+  }[entity] || [];
+}
+
+function getClienteName(id) {
+  return state.clientes.find((cliente) => cliente.id === id)?.nome_empresa || '';
+}
+
+function getOverdueTasks() {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return state.tarefas.filter((task) => task.data_vencimento && !['concluida', 'cancelada'].includes(task.status) && new Date(`${task.data_vencimento}T00:00:00`) < today);
+}
+
+function daysSince(value) {
+  if (!value) return 9999;
+  return Math.floor((Date.now() - new Date(`${value}T00:00:00`).getTime()) / 86400000);
+}
+
+function onboardingProgress(onboarding) {
+  if (!onboarding) return 0;
+  const done = onboardingFields.filter((field) => onboarding[field]).length;
+  return Math.round((done / onboardingFields.length) * 100);
+}
+
+function labelDetailTab(tab) {
+  return {
+    visao: 'Visao geral',
+    campanhas: 'Campanhas',
+    relatorios: 'Relatorios',
+    tarefas: 'Tarefas',
+    onboarding: 'Onboarding',
+    ativos: 'Ativos',
+    observacoes: 'Observacoes',
+  }[tab];
+}
+
+function labelOnboarding(field) {
+  return field.split('_').map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(' ');
+}
+
+function getDefaultDateRange() {
+  const today = new Date();
+  const until = new Date(today);
+  until.setDate(until.getDate() - 1);
+  const since = new Date(until);
+  since.setDate(since.getDate() - 6);
+  return { since: isoDate(since), until: isoDate(until) };
+}
+
+function getThirtyDaysRange() {
+  const today = new Date();
+  const until = new Date(today);
+  until.setDate(until.getDate() - 1);
+  const since = new Date(until);
+  since.setDate(since.getDate() - 29);
+  return { since: isoDate(since), until: isoDate(until) };
+}
+
+function getFourWeeksRange() {
+  const today = new Date();
+  const until = new Date(today);
+  until.setDate(until.getDate() - 1);
+  const since = new Date(until);
+  since.setDate(since.getDate() - 27);
+  return { since: isoDate(since), until: isoDate(until) };
+}
+
+function getPreviousPeriodRange(sinceValue, untilValue) {
+  const since = new Date(`${sinceValue}T00:00:00`);
+  const until = new Date(`${untilValue}T00:00:00`);
+  const days = Math.max(1, Math.round((until.getTime() - since.getTime()) / 86400000) + 1);
+  const previousUntil = new Date(since);
+  previousUntil.setDate(previousUntil.getDate() - 1);
+  const previousSince = new Date(previousUntil);
+  previousSince.setDate(previousSince.getDate() - days + 1);
+  return { since: isoDate(previousSince), until: isoDate(previousUntil) };
+}
+
+function isoDate(value) {
+  const y = value.getFullYear();
+  const m = String(value.getMonth() + 1).padStart(2, '0');
+  const d = String(value.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+function exportEntity(entity) {
+  const rows = {
+    clientes: state.clientes,
+    campanhas: state.campanhas.map((item) => ({ ...item, cliente: item.clientes?.nome_empresa || getClienteName(item.cliente_id) })),
+    relatorios: state.relatorios.map((item) => ({ ...item, cliente: item.clientes?.nome_empresa || getClienteName(item.cliente_id) })),
+    tarefas: state.tarefas.map((item) => ({ ...item, cliente: item.clientes?.nome_empresa || getClienteName(item.cliente_id) })),
+    diario: state.diarios.map((item) => ({ ...item, cliente: item.clientes?.nome_empresa || getClienteName(item.cliente_id) })),
+    equipe: state.equipe,
+  }[entity] || [];
+  exportCsv(`${entity}-${new Date().toISOString().slice(0, 10)}.csv`, rows);
+}
+
+function exportCsv(filename, rows) {
+  if (!rows.length) {
+    toast('Nenhum dado para exportar.', 'error');
+    return;
+  }
+  const normalized = rows.map((row) => flattenRow(row));
+  const headers = Object.keys(normalized[0]);
+  const csv = [
+    headers.join(','),
+    ...normalized.map((row) => headers.map((header) => csvEscape(row[header])).join(',')),
+  ].join('\n');
+  const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+  toast('CSV gerado.');
+}
+
+function flattenRow(row) {
+  return Object.fromEntries(Object.entries(row).filter(([, value]) => typeof value !== 'object' || value === null).map(([key, value]) => [key, value ?? '']));
+}
+
+function csvEscape(value) {
+  const text = String(value ?? '').replaceAll('"', '""');
+  return /[",\n;]/.test(text) ? `"${text}"` : text;
+}
+
+async function fetchMetaAdsReport() {
+  const token = state.metaAds.token;
+  const cliente = state.clientes.find((item) => item.id === state.metaAds.clienteId);
+  if (!token || token.length < 20) {
+    toast('Informe um Access Token Meta Ads.', 'error');
+    return;
+  }
+  if (!cliente?.meta_ads_act) {
+    toast('Selecione um cliente com meta_ads_act cadastrado.', 'error');
+    return;
+  }
+
+  state.metaAds.loading = true;
+  state.metaAds.error = '';
+  state.metaAds.report = null;
+  state.googleAds.loading = false;
+  state.googleAds.error = '';
+  state.googleAds.report = null;
+  render();
+
+  try {
+    const accountId = normalizeMetaAccount(cliente.meta_ads_act);
+    const goal = metaGoalConfig[state.metaAds.goal] || metaGoalConfig.mensagens;
+    const fourWeeks = getFourWeeksRange();
+    const ads = await fetchMetaAds(token, accountId);
+    const previousRange = getPreviousPeriodRange(state.metaAds.since, state.metaAds.until);
+    const [rows, previousRows, weeklyRows] = await Promise.all([
+      fetchMetaInsights(token, accountId, state.metaAds.since, state.metaAds.until, goal, ads),
+      fetchMetaInsights(token, accountId, previousRange.since, previousRange.until, goal, ads),
+      fetchMetaInsights(token, accountId, fourWeeks.since, fourWeeks.until, goal, ads, '7'),
+    ]);
+    const totals = summarizeMetaRows(rows);
+    const previousTotals = summarizeMetaRows(previousRows);
+    state.metaAds.report = {
+      cliente,
+      accountId,
+      since: state.metaAds.since,
+      until: state.metaAds.until,
+      previous: {
+        since: previousRange.since,
+        until: previousRange.until,
+        rows: previousRows,
+        totals: previousTotals,
+      },
+      goalKey: state.metaAds.goal,
+      goal,
+      rows,
+      weeklyRows,
+      totals,
+    };
+
+    // Se o cliente tem Google Ads configurado, busca em paralelo
+    if (cliente.google_ads_id) {
+      fetchGoogleAdsReport(cliente, state.metaAds.since, state.metaAds.until);
+    }
+  } catch (error) {
+    state.metaAds.error = error.message || 'Erro ao consultar Meta Ads.';
+  } finally {
+    state.metaAds.loading = false;
+    render();
+  }
+}
+
+async function fetchGoogleAdsReport(cliente, since, until) {
+  state.googleAds.loading = true;
+  state.googleAds.error = '';
+  state.googleAds.report = null;
+  render();
+  try {
+    const report = await fetchLocalGoogleAdsReport({ customerId: cliente.google_ads_id, since, until });
+    report.clienteName = cliente.nome_empresa || '';
+    state.googleAds.report = report;
+  } catch (error) {
+    state.googleAds.error = error.message || 'Erro ao consultar Google Ads.';
+  } finally {
+    state.googleAds.loading = false;
+    render();
+  }
+}
+
+async function fetchLocalGoogleAdsReport(payload) {
+  const response = await fetch('/api/google-ads', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data?.error) throw new Error(data.error || 'API Google Ads indisponivel. Configure as credenciais no .env.');
+  return data;
+}
+
+async function importLegacyMetaAdsClients() {
+  const existingActs = new Set(state.clientes.map((cliente) => normalizeMetaAccount(cliente.meta_ads_act)).filter(Boolean));
+  const toImport = legacyMetaAdsClients
+    .filter((cliente) => !existingActs.has(cliente.meta_ads_act))
+    .map((cliente) => ({
+      ...cliente,
+      observacoes: 'Importado do projeto Relatorios meta ads.',
+    }));
+
+  if (!toImport.length) {
+    toast('Todos os clientes do Relatorios Meta Ads ja estao importados.');
+    return;
+  }
+
+  try {
+    for (const cliente of toImport) {
+      await clienteService.create(cliente);
+    }
+    await loadAll();
+    render();
+    toast(`${toImport.length} cliente(s) importado(s).`);
+  } catch (error) {
+    showError(error);
+  }
+}
+
+function inferMetaGoal(cliente) {
+  const text = `${cliente?.nome_empresa || ''} ${cliente?.segmento || ''} ${cliente?.observacoes || ''}`.toLowerCase();
+  if (text.includes('vendas') || text.includes('e-commerce') || text.includes('ecommerce') || text.includes('trokai') || text.includes('nv store')) return 'vendas';
+  if (text.includes('leads') || text.includes('lead')) return 'leads';
+  if (text.includes('seguidores') || text.includes('seguidor')) return 'seguidores';
+  return 'mensagens';
+}
+
+function normalizeMetaAccount(value) {
+  const raw = String(value || '').trim();
+  return raw.startsWith('act_') ? raw : `act_${raw}`;
+}
+
+async function fetchMetaAccountResultCost(token, accountId, since, until, goal) {
+  const fields = ['spend', 'actions'].join(',');
+  const params = new URLSearchParams({
+    fields,
+    time_range: JSON.stringify({ since, until }),
+    access_token: token,
+  });
+  const response = await fetch(`https://graph.facebook.com/v20.0/${accountId}/insights?${params.toString()}`);
+  const data = await response.json();
+  if (!response.ok || data.error) {
+    const err = data.error || {};
+    if (String(err.code) === '190') throw new Error('Token expirado');
+    throw new Error(err.message || `Erro Meta Ads ${response.status}`);
+  }
+  const row = data.data?.[0] || {};
+  const investimento = Number(row.spend || 0);
+  const resultados = extractMetaAction(row, goal.actionTypes);
+  return {
+    investimento,
+    resultados,
+    custo: resultados ? investimento / resultados : 0,
+  };
+}
+
+async function fetchMetaInsights(token, accountId, since, until, goal, ads, timeIncrement = '') {
+  const fields = [
+    'ad_id',
+    'ad_name',
+    'adset_id',
+    'adset_name',
+    'campaign_id',
+    'campaign_name',
+    'impressions',
+    'reach',
+    'clicks',
+    'cpc',
+    'cpm',
+    'ctr',
+    'spend',
+    'actions',
+    'cost_per_action_type',
+  ].join(',');
+  const params = new URLSearchParams({
+    level: 'ad',
+    fields,
+    time_range: JSON.stringify({ since, until }),
+    limit: '100',
+    access_token: token,
+  });
+  if (timeIncrement) params.set('time_increment', timeIncrement);
+  const rows = [];
+  let next = `https://graph.facebook.com/v20.0/${accountId}/insights?${params.toString()}`;
+  while (next) {
+    const response = await fetch(next);
+    const data = await response.json();
+    if (!response.ok || data.error) {
+      const err = data.error || {};
+      if (String(err.code) === '190') throw new Error('Token Meta Ads expirado ou invalido.');
+      throw new Error(err.message || `Erro Meta Ads ${response.status}`);
+    }
+    rows.push(...(data.data || []).map((row) => normalizeMetaInsightRow(row, ads.get(row.ad_id), goal)));
+    next = data.paging?.next || '';
+  }
+  return rows.sort((a, b) => b.spend - a.spend);
+}
+
+async function fetchMetaAds(token, accountId) {
+  const fields = encodeURIComponent(['id', 'name', 'status', 'effective_status', 'campaign{id,name}', 'adset{id,name}', 'creative{id,name,thumbnail_url,image_url,object_story_spec}'].join(','));
+  const ads = new Map();
+  let next = `https://graph.facebook.com/v20.0/${accountId}/ads?fields=${fields}&effective_status=["ACTIVE"]&limit=100&access_token=${encodeURIComponent(token)}`;
+  while (next) {
+    const response = await fetch(next);
+    const data = await response.json();
+    if (!response.ok || data.error) {
+      const err = data.error || {};
+      if (String(err.code) === '190') throw new Error('Token Meta Ads expirado ou invalido.');
+      throw new Error(err.message || `Erro Meta Ads ${response.status}`);
+    }
+    for (const ad of data.data || []) ads.set(ad.id, ad);
+    next = data.paging?.next || '';
+  }
+  return ads;
+}
+
+function normalizeMetaInsightRow(row, ad = null, goal = metaGoalConfig.mensagens) {
+  const resultados = extractMetaAction(row, goal.actionTypes);
+  const leads = extractMetaAction(row, metaGoalConfig.leads.actionTypes);
+  const mensagens = extractMetaAction(row, metaGoalConfig.mensagens.actionTypes);
+  const vendas = extractMetaAction(row, metaGoalConfig.vendas.actionTypes);
+  return {
+    campaign_id: row.campaign_id,
+    campaign_name: ad?.campaign?.name || row.campaign_name,
+    ad_id: row.ad_id,
+    ad_name: ad?.name || row.ad_name,
+    adset_id: row.adset_id,
+    adset_name: ad?.adset?.name || row.adset_name,
+    status: ad?.effective_status || ad?.status || 'ACTIVE',
+    thumb: extractMetaThumb(ad?.creative),
+    date_start: row.date_start || '',
+    date_stop: row.date_stop || '',
+    impressions: Number(row.impressions || 0),
+    reach: Number(row.reach || 0),
+    clicks: Number(row.clicks || 0),
+    cpc: Number(row.cpc || 0),
+    cpm: Number(row.cpm || 0),
+    ctr: Number(row.ctr || 0),
+    spend: Number(row.spend || 0),
+    leads,
+    mensagens,
+    vendas,
+    resultados,
+  };
+}
+
+function groupMetaRowsByWeek(rows) {
+  const byPeriod = new Map();
+  rows.forEach((row) => {
+    const since = row.date_start || 'periodo';
+    const until = row.date_stop || row.date_start || 'periodo';
+    const key = `${since}|${until}`;
+    const current = byPeriod.get(key) || { since, until, rows: [] };
+    current.rows.push(row);
+    byPeriod.set(key, current);
+  });
+  return [...byPeriod.values()].sort((a, b) => String(a.since).localeCompare(String(b.since)));
+}
+
+function buildFourWeekSummary(rows) {
+  const range = getFourWeeksRange();
+  const start = new Date(`${range.since}T00:00:00`);
+  const weeks = Array.from({ length: 4 }, (_, index) => {
+    const since = new Date(start);
+    since.setDate(start.getDate() + index * 7);
+    const until = new Date(since);
+    until.setDate(since.getDate() + 6);
+    return { since: isoDate(since), until: isoDate(until), rows: [] };
+  });
+
+  rows.forEach((row) => {
+    const rowSince = row.date_start ? new Date(`${row.date_start}T00:00:00`) : null;
+    if (!rowSince) return;
+    const index = Math.floor((rowSince.getTime() - start.getTime()) / (7 * 86400000));
+    if (index >= 0 && index < 4) weeks[index].rows.push(row);
+  });
+
+  return weeks;
+}
+
+function extractMetaThumb(creative) {
+  if (!creative) return '';
+  if (creative.thumbnail_url) return creative.thumbnail_url;
+  if (creative.image_url) return creative.image_url;
+  const story = creative.object_story_spec;
+  return story?.photo_data?.url || story?.video_data?.image_url || '';
+}
+
+function extractMetaAction(row, actionTypes) {
+  const actions = row.actions || [];
+  for (const actionType of actionTypes) {
+    const found = actions.find((item) => item.action_type === actionType);
+    if (found) return Number(found.value || 0);
+  }
+  return 0;
+}
+
+function summarizeMetaRows(rows) {
+  const totals = rows.reduce((acc, row) => {
+    acc.investimento += row.spend;
+    acc.impressoes += row.impressions;
+    acc.alcance += row.reach;
+    acc.cliques += row.clicks;
+    acc.leads += row.leads;
+    acc.mensagens += row.mensagens;
+    acc.vendas += row.vendas;
+    acc.resultados += row.resultados;
+    return acc;
+  }, { investimento: 0, impressoes: 0, alcance: 0, cliques: 0, leads: 0, mensagens: 0, vendas: 0, resultados: 0 });
+  totals.ctr = totals.impressoes ? (totals.cliques / totals.impressoes) * 100 : 0;
+  totals.cpc = totals.cliques ? totals.investimento / totals.cliques : 0;
+  totals.cpm = totals.impressoes ? (totals.investimento / totals.impressoes) * 1000 : 0;
+  totals.custo_por_lead = totals.leads ? totals.investimento / totals.leads : 0;
+  totals.custo_por_mensagem = totals.mensagens ? totals.investimento / totals.mensagens : 0;
+  totals.custo_por_venda = totals.vendas ? totals.investimento / totals.vendas : 0;
+  totals.custo_por_resultado = totals.resultados ? totals.investimento / totals.resultados : 0;
+  return totals;
+}
+
+async function saveMetaReport() {
+  const report = state.metaAds.report;
+  if (!report) return;
+  const isVendas = report.goalKey === 'vendas';
+  const isLeads = report.goalKey === 'leads';
+  const isMensagens = report.goalKey === 'mensagens';
+  try {
+    const saved = await relatorioService.create({
+      cliente_id: report.cliente.id,
+      periodo_inicio: report.since,
+      periodo_fim: report.until,
+      investimento: Number(report.totals.investimento.toFixed(2)),
+      impressoes: report.totals.impressoes,
+      alcance: report.totals.alcance,
+      cliques: report.totals.cliques,
+      ctr: Number(report.totals.ctr.toFixed(4)),
+      cpc: Number(report.totals.cpc.toFixed(2)),
+      leads: isLeads ? report.totals.resultados : report.totals.leads,
+      custo_por_lead: Number((isLeads ? report.totals.custo_por_resultado : report.totals.custo_por_lead).toFixed(2)),
+      mensagens: isMensagens ? report.totals.resultados : report.totals.mensagens,
+      custo_por_mensagem: Number((isMensagens ? report.totals.custo_por_resultado : report.totals.custo_por_mensagem).toFixed(2)),
+      vendas: isVendas ? report.totals.resultados : report.totals.vendas,
+      meta_ads_act_snapshot: report.accountId,
+      analise_estrategica: `Relatorio importado da Meta Ads API pelo The Midia Master. Objetivo: ${report.goal.label}.`,
+    });
+    await loadAll();
+    state.lastSavedRelatorioId = saved.id;
+    state.metaAds.report = null;
+    navigate('relatorios');
+    toast('Relatorio salvo e listado em Relatorios.');
+  } catch (error) {
+    showError(error);
+  }
+}
+
+async function fetchGbpReport() {
+  if (!state.gbp.businessQuery.trim()) {
+    toast('Informe o perfil, endereco ou link do Google Maps.', 'error');
+    return;
+  }
+  if (!state.gbp.keyword.trim()) {
+    toast('Informe a palavra-chave da busca.', 'error');
+    return;
+  }
+
+  state.gbp.loading = true;
+  state.gbp.error = '';
+  state.gbp.report = null;
+  render();
+
+  try {
+    const { data, error } = await supabase.functions.invoke('gbp-analyze', {
+      body: {
+        clienteId: state.gbp.clienteId || null,
+        businessQuery: state.gbp.businessQuery,
+        keyword: state.gbp.keyword,
+        radiusKm: state.gbp.radiusKm,
+        gridSize: state.gbp.gridSize,
+        searchCenter: state.gbp.searchCenter,
+        searchRadiusMeters: state.gbp.searchRadiusMeters,
+      },
+    });
+    if (error) throw error;
+    if (data?.error) throw new Error(data.error);
+    state.gbp.report = data;
+  } catch (error) {
+    try {
+      toast('Edge Function indisponivel. Usando API local...', 'error');
+      state.gbp.report = await fetchLocalGbpReport({
+        businessQuery: state.gbp.businessQuery,
+        keyword: state.gbp.keyword,
+        radiusKm: state.gbp.radiusKm,
+        gridSize: state.gbp.gridSize,
+        searchCenter: state.gbp.searchCenter,
+        searchRadiusMeters: state.gbp.searchRadiusMeters,
+      });
+    } catch (localError) {
+      try {
+        state.gbp.report = await analyzeGbpInBrowser({
+          businessQuery: state.gbp.businessQuery,
+          keyword: state.gbp.keyword,
+          radiusKm: state.gbp.radiusKm,
+          gridSize: state.gbp.gridSize,
+          searchCenter: state.gbp.searchCenter,
+          searchRadiusMeters: state.gbp.searchRadiusMeters,
+        });
+      } catch (fallbackError) {
+        state.gbp.error = fallbackError.message || localError.message || error.message || 'Erro ao gerar diagnostico GMN.';
+      }
+    }
+  } finally {
+    state.gbp.loading = false;
+    render();
+  }
+}
+
+async function fetchLocalGbpReport(payload) {
+  const response = await fetch('/api/gbp-analyze', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data?.error) throw new Error(data.error || 'API local GMN indisponivel.');
+  return data;
+}
+
+async function analyzeGbpInBrowser(payload) {
+  const service = await getGooglePlacesService();
+  const rawQuery = String(payload.businessQuery || '').trim();
+  const query = extractReadableQuery(rawQuery).trim();
+  const keyword = String(payload.keyword || '').trim();
+  if (!query) throw new Error('Informe o link, nome ou endereco do perfil.');
+  if (!keyword) throw new Error('Informe a palavra-chave.');
+
+  const candidates = await placesFind(service, {
+    query,
+    fields: ['place_id', 'name', 'formatted_address', 'geometry', 'rating', 'user_ratings_total', 'business_status', 'types', 'photos'],
+  });
+  const first = candidates?.[0];
+  if (!first) throw new Error('Perfil nao encontrado. Tente nome + cidade ou endereco completo.');
+
+  const detailsRaw = await placesDetails(service, {
+    placeId: first.place_id,
+    fields: ['place_id', 'name', 'formatted_address', 'geometry', 'rating', 'user_ratings_total', 'formatted_phone_number', 'international_phone_number', 'website', 'url', 'opening_hours', 'business_status', 'types', 'price_level', 'photos', 'reviews'],
+  });
+  const businessLocation = locationOf(detailsRaw.geometry.location);
+  const requestedCenter = extractMapCenter(payload.searchCenter || '');
+  const center = requestedCenter ? { lat: requestedCenter.lat, lng: requestedCenter.lng } : businessLocation;
+  const centerSource = requestedCenter ? requestedCenter.source : 'business';
+  const radiusKm = Math.max(0.5, Math.min(20, Number(payload.radiusKm) || 3));
+  const gridSize = Math.max(3, Math.min(9, Number(payload.gridSize) || 5));
+  const requestedSearchRadius = Number(payload.searchRadiusMeters);
+  const searchBiasMeters = Number.isFinite(requestedSearchRadius) && requestedSearchRadius > 0
+    ? Math.round(Math.min(50000, Math.max(100, requestedSearchRadius)))
+    : Math.round(Math.min(50000, Math.max(300, radiusKm * 1000)));
+  const points = gridPoints(center, radiusKm, gridSize);
+
+  const localResults = await mapWithConcurrency(points, 4, async (point) => {
+    const searchResults = await placesTextSearch(service, {
+      query: keyword,
+      location: new google.maps.LatLng(point.lat, point.lng),
+      radius: searchBiasMeters,
+    });
+    const results = (searchResults || []).slice(0, 20).map(normalizePlace);
+    const positionIndex = results.findIndex((place) => place.placeId === detailsRaw.place_id);
+    return { point, position: positionIndex >= 0 ? positionIndex + 1 : null, found: positionIndex >= 0, results };
+  });
+
+  const details = {
+    placeId: detailsRaw.place_id,
+    name: detailsRaw.name,
+    address: detailsRaw.formatted_address,
+    rating: detailsRaw.rating || null,
+    userRatingsTotal: detailsRaw.user_ratings_total || 0,
+    phone: detailsRaw.formatted_phone_number || detailsRaw.international_phone_number || '',
+    website: detailsRaw.website || '',
+    googleUrl: detailsRaw.url || '',
+    location: businessLocation,
+    businessStatus: detailsRaw.business_status || '',
+    types: detailsRaw.types || [],
+    priceLevel: detailsRaw.price_level ?? null,
+    photos: detailsRaw.photos?.length || 0,
+    weekdayText: detailsRaw.opening_hours?.weekday_text || [],
+    reviews: detailsRaw.reviews || [],
+    unansweredReviews: (detailsRaw.reviews || []).filter((review) => !review.author_reply).length,
+    totalReviewsFromApi: (detailsRaw.reviews || []).length,
+  };
+  const metrics = summarizeOwnRanking(localResults);
+  const competitors = summarizeCompetitors(localResults, center).filter((item) => item.placeId !== details.placeId);
+  const health = scoreGbpProfile(details, localResults, metrics);
+  const half = Math.max(1, Math.floor(gridSize / 2));
+
+  return {
+    generatedAt: new Date().toISOString(),
+    query,
+    keyword,
+    radiusKm,
+    searchBiasMeters,
+    gridStepKm: Number((radiusKm / half).toFixed(3)),
+    gridSize,
+    searchAreaKm2: Number((radiusKm * 2 * (radiusKm * 2)).toFixed(2)),
+    center,
+    centerSource,
+    distanceBusinessToCenterKm: Number(haversineKm(businessLocation, center).toFixed(3)),
+    warning: radiusKm > 3 ? `Raio de ${radiusKm} km gera uma area muito ampla para ranking local. Para comparar com relatorios de bairro, use 0,5 km ou 1 km.` : '',
+    details,
+    metrics,
+    localResults,
+    rankingMatrix: buildRankingMatrix(localResults),
+    competitors,
+    recommendations: buildGbpRecommendations(details, metrics, competitors),
+    health,
+  };
+}
+
+async function getGooglePlacesService() {
+  if (window.google?.maps?.places) return new google.maps.places.PlacesService(getGooglePlacesHost());
+  googlePlacesLoader ||= new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = `https://maps.googleapis.com/maps/api/js?key=${fixedGoogleMapsApiKey}&libraries=places&language=pt-BR`;
+    script.async = true;
+    script.onload = resolve;
+    script.onerror = () => reject(new Error('Nao foi possivel carregar a Google Maps JavaScript API.'));
+    document.head.appendChild(script);
+  });
+  await googlePlacesLoader;
+  if (!window.google?.maps?.places) throw new Error('Google Places nao carregou.');
+  return new google.maps.places.PlacesService(getGooglePlacesHost());
+}
+
+function getGooglePlacesHost() {
+  let host = document.getElementById('googlePlacesHost');
+  if (!host) {
+    host = document.createElement('div');
+    host.id = 'googlePlacesHost';
+    host.style.cssText = 'position:absolute;left:-9999px;top:-9999px;width:320px;height:240px;';
+    document.body.appendChild(host);
+  }
+  if (!googlePlacesMap) {
+    googlePlacesMap = new google.maps.Map(host, {
+      center: { lat: -22.9, lng: -47.1 },
+      zoom: 13,
+      disableDefaultUI: true,
+    });
+  }
+  return googlePlacesMap;
+}
+
+function placesFind(service, request) {
+  return withTimeout(new Promise((resolve, reject) => {
+    service.findPlaceFromQuery(request, (results, status) => {
+      if (status === google.maps.places.PlacesServiceStatus.OK || status === google.maps.places.PlacesServiceStatus.ZERO_RESULTS) resolve(results || []);
+      else reject(new Error(`Google Places: ${status}`));
+    });
+  }), 20000, 'Tempo esgotado ao localizar o perfil.');
+}
+
+function placesDetails(service, request) {
+  return withTimeout(new Promise((resolve, reject) => {
+    service.getDetails(request, (result, status) => {
+      if (status === google.maps.places.PlacesServiceStatus.OK) resolve(result);
+      else reject(new Error(`Google Details: ${status}`));
+    });
+  }), 20000, 'Tempo esgotado ao buscar dados do perfil.');
+}
+
+function placesTextSearch(service, request) {
+  return withTimeout(new Promise((resolve, reject) => {
+    service.textSearch(request, (results, status) => {
+      if (status === google.maps.places.PlacesServiceStatus.OK || status === google.maps.places.PlacesServiceStatus.ZERO_RESULTS) resolve(results || []);
+      else reject(new Error(`Google Text Search: ${status}`));
+    });
+  }), 25000, 'Tempo esgotado em um ponto do grid.');
+}
+
+function withTimeout(promise, ms, message) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error(message)), ms)),
+  ]);
+}
+
+async function mapWithConcurrency(items, concurrency, worker) {
+  const results = new Array(items.length);
+  let cursor = 0;
+  const runners = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (cursor < items.length) {
+      const index = cursor;
+      cursor += 1;
+      results[index] = await worker(items[index], index);
+    }
+  });
+  await Promise.all(runners);
+  return results;
+}
+
+function extractReadableQuery(input) {
+  if (!input) return '';
+  try {
+    const url = new URL(input);
+    const query = url.searchParams.get('q') || url.searchParams.get('query');
+    if (query) return query;
+    const placeIndex = url.pathname.indexOf('/place/');
+    if (placeIndex >= 0) {
+      const raw = url.pathname.slice(placeIndex + 7).split('/')[0];
+      return decodeURIComponent(raw.replaceAll('+', ' '));
+    }
+  } catch {
+    return input;
+  }
+  return input;
+}
+
+function extractMapCenter(input) {
+  if (!input) return null;
+  const text = String(input);
+  const atMatch = text.match(/@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)(?:,|z|$)/);
+  if (atMatch) return { lat: Number(atMatch[1]), lng: Number(atMatch[2]), source: 'url' };
+  const pairMatch = text.match(/(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/);
+  return pairMatch ? { lat: Number(pairMatch[1]), lng: Number(pairMatch[2]), source: 'manual' } : null;
+}
+
+function locationOf(location) {
+  return {
+    lat: typeof location.lat === 'function' ? location.lat() : location.lat,
+    lng: typeof location.lng === 'function' ? location.lng() : location.lng,
+  };
+}
+
+function gridPoints(center, radiusKm, gridSize) {
+  const points = [];
+  const steps = Math.max(3, Math.min(9, Number(gridSize) || 5));
+  const half = Math.floor(steps / 2);
+  const latKm = 110.574;
+  const lngKm = 111.32 * Math.cos((center.lat * Math.PI) / 180);
+  for (let y = -half; y <= half; y += 1) {
+    for (let x = -half; x <= half; x += 1) {
+      points.push({ lat: center.lat + (y * radiusKm) / half / latKm, lng: center.lng + (x * radiusKm) / half / lngKm, x, y });
+    }
+  }
+  return points;
+}
+
+function normalizePlace(place) {
+  return {
+    placeId: place.place_id,
+    name: place.name,
+    address: place.formatted_address || place.vicinity || '',
+    rating: place.rating || null,
+    userRatingsTotal: place.user_ratings_total || 0,
+    businessStatus: place.business_status || '',
+    location: place.geometry?.location ? locationOf(place.geometry.location) : null,
+    types: place.types || [],
+    priceLevel: place.price_level ?? null,
+    openNow: place.opening_hours?.open_now ?? null,
+    photos: place.photos?.length || 0,
+  };
+}
+
+function summarizeOwnRanking(localResults) {
+  const totalPoints = localResults.length;
+  const missingPosition = 21;
+  const positions = localResults.filter((item) => item.position).map((item) => item.position);
+  const totalPosition = positions.reduce((sum, position) => sum + position, 0);
+  const top3 = positions.filter((position) => position <= 3).length;
+  const top10 = positions.filter((position) => position <= 10).length;
+  return {
+    visibility: Math.round((positions.length / totalPoints) * 100),
+    averagePosition: positions.length ? Number((totalPosition / positions.length).toFixed(2)) : null,
+    arp: positions.length ? Number((totalPosition / positions.length).toFixed(2)) : null,
+    atrp: Number(((totalPosition + (totalPoints - positions.length) * missingPosition) / totalPoints).toFixed(2)),
+    solv: Number(((top3 / totalPoints) * 100).toFixed(2)),
+    top3,
+    top10,
+    foundPoints: positions.length,
+    totalPoints,
+    bestPosition: positions.length ? Math.min(...positions) : null,
+    worstPosition: positions.length ? Math.max(...positions) : null,
+  };
+}
+
+function summarizeCompetitors(results, center) {
+  const byId = new Map();
+  const totalPoints = results.length;
+  const missingPosition = 21;
+  for (const search of results) {
+    search.results.forEach((place, index) => {
+      if (!byId.has(place.placeId)) {
+        byId.set(place.placeId, { ...place, appearances: 0, bestPosition: index + 1, totalPosition: 0, top3: 0, distanceKm: place.location ? haversineKm(center, place.location) : null });
+      }
+      const current = byId.get(place.placeId);
+      current.appearances += 1;
+      current.bestPosition = Math.min(current.bestPosition, index + 1);
+      current.totalPosition += index + 1;
+      if (index + 1 <= 3) current.top3 += 1;
+    });
+  }
+  return [...byId.values()].map((item) => ({
+    ...item,
+    foundLabel: `${item.appearances} / ${totalPoints}`,
+    visibility: Number(((item.appearances / totalPoints) * 100).toFixed(2)),
+    arp: Number((item.totalPosition / item.appearances).toFixed(2)),
+    atrp: Number(((item.totalPosition + (totalPoints - item.appearances) * missingPosition) / totalPoints).toFixed(2)),
+    solv: Number(((item.top3 / totalPoints) * 100).toFixed(2)),
+    averagePosition: Number((item.totalPosition / item.appearances).toFixed(1)),
+  })).sort((a, b) => b.visibility - a.visibility || a.atrp - b.atrp).slice(0, 60);
+}
+
+function buildRankingMatrix(localResults) {
+  return [...localResults].sort((a, b) => a.point.y - b.point.y || a.point.x - b.point.x).map((item) => ({
+    x: item.point.x,
+    y: item.point.y,
+    lat: Number(item.point.lat.toFixed(6)),
+    lng: Number(item.point.lng.toFixed(6)),
+    position: item.position,
+    label: item.position ? String(item.position) : '20+',
+    found: item.found,
+    topResult: item.results[0]?.name || '',
+  }));
+}
+
+function scoreGbpProfile(details, localResults, metrics) {
+  const checks = [
+    { label: 'Nome e endereco encontrados', ok: Boolean(details.name && details.address), weight: 12, observation: details.name && details.address ? 'O perfil tem identificacao e endereco principal preenchidos.' : 'Nome ou endereco nao foram encontrados na consulta.', recommendation: details.name && details.address ? 'Mantenha nome, endereco e bairro iguais em site, redes sociais e diretorios.' : 'Corrija o nome/endereco no Perfil da Empresa e padronize esses dados em todos os canais.' },
+    { label: 'Nota acima de 4,3', ok: Number(details.rating || 0) >= 4.3, weight: 14, observation: details.rating ? `Nota atual: ${details.rating}.` : 'Nao encontrei nota publica no perfil.', recommendation: Number(details.rating || 0) >= 4.3 ? 'Continue pedindo avaliacoes recentes e responda todas.' : 'Crie uma rotina de pedido de avaliacoes apos atendimento.' },
+    { label: 'Volume de avaliacoes competitivo', ok: Number(details.userRatingsTotal || 0) >= 30, weight: 14, observation: `Total encontrado: ${details.userRatingsTotal || 0} avaliacoes.`, recommendation: Number(details.userRatingsTotal || 0) >= 30 ? 'Compare o volume com os concorrentes que mais aparecem.' : 'Defina uma meta mensal de novas avaliacoes.' },
+    { label: 'Avaliacoes respondidas', ok: details.totalReviewsFromApi === 0 || details.unansweredReviews === 0, weight: 10, observation: details.totalReviewsFromApi > 0 ? `${details.unansweredReviews} de ${details.totalReviewsFromApi} avaliacoes recentes sem resposta.` : 'Nenhuma avaliacao encontrada para verificar.', recommendation: 'Responda todas as avaliacoes, especialmente as negativas.' },
+    { label: 'Telefone cadastrado', ok: Boolean(details.phone), weight: 10, observation: details.phone ? `Telefone encontrado: ${details.phone}.` : 'Nenhum telefone foi retornado pela API.', recommendation: details.phone ? 'Teste se o numero atende rapido.' : 'Adicione telefone ou WhatsApp comercial no perfil.' },
+    { label: 'Site cadastrado', ok: Boolean(details.website), weight: 10, observation: details.website ? `Site encontrado: ${details.website}.` : 'O perfil nao retornou site cadastrado.', recommendation: details.website ? 'Garanta que a pagina tenha dados locais.' : 'Cadastre site ou pagina de destino.' },
+    { label: 'Horarios cadastrados', ok: Boolean(details.weekdayText?.length), weight: 10, observation: details.weekdayText?.length ? 'Horarios de funcionamento encontrados.' : 'Horarios nao foram encontrados.', recommendation: 'Revise horarios normais e especiais.' },
+    { label: 'Fotos no perfil', ok: details.photos > 0, weight: 10, observation: `Fotos retornadas pela consulta: ${details.photos}.`, recommendation: 'Publique fotos novas com frequencia.' },
+    { label: 'Boa visibilidade no grid local', ok: metrics.visibility >= 60, weight: 20, observation: `Apareceu em ${localResults.filter((item) => item.position).length} de ${localResults.length} pontos analisados.`, recommendation: 'Trabalhe os pontos amarelos e vermelhos para ganhar top 3.' },
+    { label: 'Presenca no top 3', ok: metrics.solv >= 15, weight: 14, observation: `Ficou no top 3 em ${metrics.top3} de ${metrics.totalPoints} pontos (${metrics.solv}%).`, recommendation: 'Priorize avaliacoes recentes, categorias corretas e paginas locais.' },
+    { label: 'Posicao media competitiva', ok: Boolean(metrics.averagePosition && metrics.averagePosition <= 10), weight: 14, observation: metrics.averagePosition ? `Posicao media quando encontrado: ${metrics.averagePosition}.` : 'O perfil nao foi encontrado no top 20.', recommendation: 'Estude concorrentes dominantes e aumente relevancia local.' },
+  ];
+  const total = checks.reduce((sum, item) => sum + item.weight, 0);
+  const earned = checks.reduce((sum, item) => sum + (item.ok ? item.weight : 0), 0);
+  return { score: Math.round((earned / total) * 100), checks };
+}
+
+function buildGbpRecommendations(details, metrics, competitors) {
+  const recs = [];
+  const betterCompetitors = competitors.filter((item) => item.atrp < metrics.atrp).slice(0, 5);
+  if (metrics.visibility < 60) recs.push({ priority: 'Alta', title: 'Aumentar cobertura na regiao analisada', body: `O perfil apareceu em ${metrics.foundPoints} de ${metrics.totalPoints} pontos.` });
+  if (metrics.solv < 20) recs.push({ priority: 'Alta', title: 'Ganhar mais posicoes no top 3', body: `Apenas ${metrics.solv}% da grade ficou no top 3.` });
+  if (!details.website) recs.push({ priority: 'Media', title: 'Adicionar site ao perfil', body: 'Site completo ajuda categoria, servicos e localizacao.' });
+  if (!details.phone) recs.push({ priority: 'Media', title: 'Adicionar telefone', body: 'Telefone ausente reduz conversao.' });
+  if (betterCompetitors.length) recs.push({ priority: 'Alta', title: 'Estudar concorrentes dominantes', body: `Concorrentes como ${betterCompetitors.map((item) => item.name).join(', ')} aparecem melhor na grade.` });
+  return recs.length ? recs.slice(0, 6) : [{ priority: 'Baixa', title: 'Manter consistencia e frequencia', body: 'Mantenha fotos, posts, respostas e categorias atualizadas.' }];
+}
+
+function haversineKm(a, b) {
+  const r = 6371;
+  const dLat = ((b.lat - a.lat) * Math.PI) / 180;
+  const dLng = ((b.lng - a.lng) * Math.PI) / 180;
+  const lat1 = (a.lat * Math.PI) / 180;
+  const lat2 = (b.lat * Math.PI) / 180;
+  const sinLat = Math.sin(dLat / 2);
+  const sinLng = Math.sin(dLng / 2);
+  const h = sinLat * sinLat + Math.cos(lat1) * Math.cos(lat2) * sinLng * sinLng;
+  return 2 * r * Math.asin(Math.sqrt(h));
+}
+
+function showError(error) {
+  console.error(error);
+  toast(error.message || 'Erro inesperado.', 'error');
+}
