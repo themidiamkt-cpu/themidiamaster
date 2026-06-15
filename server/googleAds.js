@@ -9,11 +9,11 @@ const GOOGLE_ADS_BASE_URL = `https://googleads.googleapis.com/${GOOGLE_ADS_API_V
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 
 function getCredentials() {
-  const developerToken = process.env.GOOGLE_ADS_DEVELOPER_TOKEN;
-  const clientId = process.env.GOOGLE_ADS_CLIENT_ID;
-  const clientSecret = process.env.GOOGLE_ADS_CLIENT_SECRET;
-  const refreshToken = process.env.GOOGLE_ADS_REFRESH_TOKEN;
-  const loginCustomerId = process.env.GOOGLE_ADS_LOGIN_CUSTOMER_ID || '';
+  const developerToken = process.env.GOOGLE_ADS_DEVELOPER_TOKEN?.trim();
+  const clientId = process.env.GOOGLE_ADS_CLIENT_ID?.trim();
+  const clientSecret = process.env.GOOGLE_ADS_CLIENT_SECRET?.trim();
+  const refreshToken = process.env.GOOGLE_ADS_REFRESH_TOKEN?.trim();
+  const loginCustomerId = process.env.GOOGLE_ADS_LOGIN_CUSTOMER_ID?.trim() || '';
   if (!developerToken) throw new Error('GOOGLE_ADS_DEVELOPER_TOKEN nao configurado.');
   if (!clientId) throw new Error('GOOGLE_ADS_CLIENT_ID nao configurado.');
   if (!clientSecret) throw new Error('GOOGLE_ADS_CLIENT_SECRET nao configurado.');
