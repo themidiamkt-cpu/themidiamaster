@@ -39,6 +39,7 @@ const state = {
   vendas: [],
   vendasMissingTable: false,
   dashboardClientesClienteId: 'all',
+  dashboardClientesOrigem: 'all',
   tarefas: [],
   diarios: [],
   diarioMissingTable: false,
@@ -783,6 +784,7 @@ function renderDashboardClientes() {
   const rows = getDashboardClienteRows(monthRange)
     .filter((row) => state.dashboardClientesClienteId === 'all' || row.cliente.id === state.dashboardClientesClienteId);
   const clientOptions = state.clientes.map((cliente) => `<option value="${cliente.id}" ${state.dashboardClientesClienteId === cliente.id ? 'selected' : ''}>${escapeHtml(cliente.nome_empresa)}</option>`).join('');
+  const originOptions = getDashboardOriginOptions().map((origem) => `<option value="${escapeHtml(origem)}" ${state.dashboardClientesOrigem === origem ? 'selected' : ''}>${escapeHtml(origem)}</option>`).join('');
 
   return `
     ${pageHeader('Dashboard Clientes', 'Comparativo dos ultimos 4 meses com Meta Ads e vendas por cliente.', `<button class="secondary-button" data-action="export" data-entity="vendas"><i data-lucide="download"></i>CSV vendas</button><button class="button" data-action="new" data-entity="vendas"><i data-lucide="plus"></i>Lancar venda</button>`)}
@@ -794,6 +796,13 @@ function renderDashboardClientes() {
         <select data-action="client-dashboard-client">
           <option value="all" ${state.dashboardClientesClienteId === 'all' ? 'selected' : ''}>Todos os clientes</option>
           ${clientOptions}
+        </select>
+      </label>
+      <label>Origem
+        <select data-action="client-dashboard-origin">
+          <option value="all" ${state.dashboardClientesOrigem === 'all' ? 'selected' : ''}>Todas as origens</option>
+          <option value="Meta Ads" ${state.dashboardClientesOrigem === 'Meta Ads' ? 'selected' : ''}>Meta Ads</option>
+          ${originOptions}
         </select>
       </label>
       <div class="client-dashboard-range-note">
@@ -899,9 +908,12 @@ function aggregateClientMetricsForRange(cliente, range) {
   const relatorios = getClienteRelatoriosInRange(cliente.id, range.since, range.until);
   const vendas = state.vendas.filter((venda) =>
     venda.cliente_id === cliente.id &&
-    isDateInRange(venda.data_venda, range.since, range.until)
+    isDateInRange(venda.data_venda, range.since, range.until) &&
+    matchesDashboardOrigin(venda.origem)
   );
   const isSalesGoal = getClientMetaGoalKey(cliente) === 'vendas';
+  const origin = state.dashboardClientesOrigem || 'all';
+  const allowMetaSales = origin === 'all' || origin === 'Meta Ads';
   const manualSales = sumBy(vendas, 'quantidade_vendas');
   const manualRevenue = sumBy(vendas, 'valor_total');
   const manualProducts = sumBy(vendas, 'quantidade_produtos');
@@ -921,11 +933,23 @@ function aggregateClientMetricsForRange(cliente, range) {
     impressions: meta.impressions,
     clicks: meta.clicks,
     messages: meta.messages,
-    sales: isSalesGoal ? meta.sales : manualSales,
-    products: isSalesGoal ? (manualProducts || meta.sales) : manualProducts,
-    revenue: isSalesGoal ? meta.revenue : manualRevenue,
+    sales: isSalesGoal && allowMetaSales ? meta.sales : manualSales,
+    products: isSalesGoal && allowMetaSales ? (manualProducts || meta.sales) : manualProducts,
+    revenue: isSalesGoal && allowMetaSales ? meta.revenue : manualRevenue,
     salesSource: isSalesGoal ? 'meta' : 'manual',
   };
+}
+
+function getDashboardOriginOptions() {
+  return [...new Set(state.vendas.map((venda) => String(venda.origem || '').trim()).filter(Boolean))]
+    .filter((origem) => origem !== 'Meta Ads')
+    .sort((a, b) => a.localeCompare(b, 'pt-BR'));
+}
+
+function matchesDashboardOrigin(origem) {
+  const selected = state.dashboardClientesOrigem || 'all';
+  if (selected === 'all') return true;
+  return String(origem || '').trim() === selected;
 }
 
 function getClientDashboardMetaMetrics(clienteId, range) {
@@ -937,7 +961,7 @@ function getClientDashboardMetaMetrics(clienteId, range) {
 
 function scheduleClientDashboardMetaLoad(range, force = false) {
   if (!isMainAdmin()) return;
-  const key = `${range.since}|${range.until}|${state.dashboardClientesClienteId}`;
+  const key = `${range.since}|${range.until}|${state.dashboardClientesClienteId}|${state.dashboardClientesOrigem}`;
   if (!force && (state.clientDashboardMeta.loading || state.clientDashboardMeta.loadedKey === key)) return;
   if (!state.clientes.some((cliente) => cliente.meta_ads_act)) return;
   setTimeout(() => loadClientDashboardMeta(range, key, force), 0);
@@ -2718,6 +2742,7 @@ function bindGlobalActions() {
     if (action === 'print') el.addEventListener('click', () => window.print());
     if (action === 'refresh') el.addEventListener('click', async () => { await loadAll(); render(); toast('Dados atualizados.'); });
     if (action === 'client-dashboard-client') el.addEventListener('change', () => { state.dashboardClientesClienteId = el.value || 'all'; render(); });
+    if (action === 'client-dashboard-origin') el.addEventListener('change', () => { state.dashboardClientesOrigem = el.value || 'all'; render(); });
     if (action === 'refresh-client-meta-costs') el.addEventListener('click', () => loadClientMetaCosts(true));
     if (action === 'toggle-task-status') el.addEventListener('click', () => toggleTaskStatus(el.dataset.id, el.dataset.status));
     if (action === 'open-task-detail') el.addEventListener('click', () => openTaskDetail(el.dataset.id));
