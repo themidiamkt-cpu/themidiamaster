@@ -23,6 +23,7 @@ export function statusBadge(value) {
 export function label(value) {
   const labels = {
     ativo: 'Ativo',
+    dashboardClientes: 'Dashboard Clientes',
     pausado: 'Pausado',
     cancelado: 'Cancelado',
     prospect: 'Prospect',
@@ -47,6 +48,10 @@ export function label(value) {
     pausada: 'Pausada',
     encerrada: 'Encerrada',
     teste: 'Teste',
+    manual: 'Manual',
+    shopify: 'Shopify',
+    woocommerce: 'WooCommerce',
+    crm: 'CRM',
     baixa: 'Baixa',
     media: 'Media',
     alta: 'Alta',

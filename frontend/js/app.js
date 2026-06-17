@@ -11,6 +11,7 @@ import { equipeService } from './services/equipeService.js';
 import { diarioBordoService } from './services/diarioBordoService.js';
 import { alertaAnomaliaService } from './services/alertaAnomaliaService.js';
 import { metaClienteService } from './services/metaClienteService.js';
+import { vendaClienteService } from './services/vendaClienteService.js';
 import { confirmDelete, date, emptyState, escapeHtml, label, loadingState, money, number, pageHeader, renderLucide, statCard, statusBadge, toast } from './components/ui.js';
 
 const app = document.getElementById('app');
@@ -23,7 +24,7 @@ const fixedMetaAccessToken = 'EAAKJkRH2esoBRc0EFaZAkKc3TrzQZC6YZCmWP0tj4b7EdZBAa
 const fixedGoogleMapsApiKey = 'AIzaSyAyH7teIp1Xjprln7TaA1i_dIY8TB0_HgE';
 const whatsappWebhookUrl = 'https://automacao2.themidiamarketing.com.br/webhook/conectar-cliente';
 const mainAdminEmail = 'themidiamkt@gmail.com';
-const adminViews = ['dashboard', 'clientes', 'relatorios', 'crm', 'metaAds', 'gbp', 'diario', 'tarefas', 'equipe', 'metas', 'alertas', 'config'];
+const adminViews = ['dashboard', 'dashboardClientes', 'clientes', 'relatorios', 'crm', 'metaAds', 'gbp', 'diario', 'tarefas', 'equipe', 'metas', 'alertas', 'config'];
 const teamViews = ['relatorios', 'metaAds', 'gbp', 'diario', 'tarefas'];
 let googlePlacesLoader = null;
 let googlePlacesMap = null;
@@ -35,6 +36,10 @@ const state = {
   leads: [],
   campanhas: [],
   relatorios: [],
+  vendas: [],
+  vendasMissingTable: false,
+  dashboardClientesRange: getRollingDateRange(30),
+  dashboardClientesClienteId: 'all',
   tarefas: [],
   diarios: [],
   diarioMissingTable: false,
@@ -196,29 +201,31 @@ async function loadAll() {
     if (!canAccessView(state.view)) state.view = getDefaultView();
 
     if (isMainAdmin()) {
-      const [clientes, leads, campanhas, relatorios, tarefas, diarios, equipe, alertas, metas] = await withTimeout(Promise.all([
+      const [clientes, leads, campanhas, relatorios, vendas, tarefas, diarios, equipe, alertas, metas] = await withTimeout(Promise.all([
         clienteService.list({ order: 'nome_empresa', ascending: true }),
         leadCrmService.list(),
         campanhaService.list({ columns: '*, clientes(nome_empresa, meta_ads_act)' }),
         relatorioService.list({ columns: '*, clientes(nome_empresa, meta_ads_act)' }),
+        safeVendasList(),
         tarefaService.list({ columns: '*, clientes(nome_empresa)' }),
         safeDiaryList(),
         equipeService.list({ order: 'nome', ascending: true }),
         safeAlertasList(),
         safeList(() => metaClienteService.listAll()),
       ]), 12000, 'O Supabase demorou para carregar os dados. Mostrando o painel em modo vazio ate atualizar.');
-      Object.assign(state, { clientes, leads, campanhas, relatorios, tarefas, diarios, equipe, alertas, metas });
+      Object.assign(state, { clientes, leads, campanhas, relatorios, vendas, tarefas, diarios, equipe, alertas, metas });
       updateAlertasBadge();
       return;
     }
 
-    const [clientes, relatorios, tarefas, diarios] = await withTimeout(Promise.all([
+    const [clientes, relatorios, vendas, tarefas, diarios] = await withTimeout(Promise.all([
       clienteService.list({ order: 'nome_empresa', ascending: true }),
       relatorioService.list({ columns: '*, clientes(nome_empresa, meta_ads_act)' }),
+      safeVendasList(),
       tarefaService.list({ columns: '*, clientes(nome_empresa)' }),
       safeDiaryList(),
     ]), 12000, 'O Supabase demorou para carregar os dados. Mostrando o painel em modo vazio ate atualizar.');
-    Object.assign(state, { clientes, leads: [], campanhas: [], relatorios, tarefas, diarios, equipe: [] });
+    Object.assign(state, { clientes, leads: [], campanhas: [], relatorios, vendas, tarefas, diarios, equipe: [] });
   } catch (error) {
     state.loadError = error.message || 'Nao foi possivel carregar os dados do Supabase.';
     showError(error);
@@ -242,6 +249,20 @@ async function safeAlertasList() {
   } catch (error) {
     if (['42P01', 'PGRST205'].includes(error?.code) || String(error?.message || '').includes('alertas_anomalia')) {
       state.alertasMissingTable = true;
+      return [];
+    }
+    throw error;
+  }
+}
+
+async function safeVendasList() {
+  try {
+    const vendas = await vendaClienteService.list({ columns: '*, clientes(nome_empresa, meta_ads_act)' });
+    state.vendasMissingTable = false;
+    return vendas;
+  } catch (error) {
+    if (['42P01', 'PGRST205'].includes(error?.code) || String(error?.message || '').includes('vendas_cliente')) {
+      state.vendasMissingTable = true;
       return [];
     }
     throw error;
@@ -352,6 +373,7 @@ function render() {
 
   const views = {
     dashboard: renderDashboard,
+    dashboardClientes: renderDashboardClientes,
     clientes: renderClientes,
     crm: renderCrm,
     campanhas: renderCampanhas,
@@ -750,6 +772,147 @@ function renderDashboard() {
   `;
 }
 
+function renderDashboardClientes() {
+  const range = state.dashboardClientesRange || getThirtyDaysRange();
+  const rows = getDashboardClienteRows(range)
+    .filter((row) => state.dashboardClientesClienteId === 'all' || row.cliente.id === state.dashboardClientesClienteId);
+  const totals = rows.reduce((acc, row) => {
+    acc.spend += row.spend;
+    acc.impressions += row.impressions;
+    acc.reach += row.reach;
+    acc.clicks += row.clicks;
+    acc.messages += row.messages;
+    acc.leads += row.leads;
+    acc.sales += row.sales;
+    acc.products += row.products;
+    acc.revenue += row.revenue;
+    return acc;
+  }, { spend: 0, impressions: 0, reach: 0, clicks: 0, messages: 0, leads: 0, sales: 0, products: 0, revenue: 0 });
+  const roas = ratio(totals.revenue, totals.spend);
+  const costPerSale = ratio(totals.spend, totals.sales);
+  const clientOptions = state.clientes.map((cliente) => `<option value="${cliente.id}" ${state.dashboardClientesClienteId === cliente.id ? 'selected' : ''}>${escapeHtml(cliente.nome_empresa)}</option>`).join('');
+
+  return `
+    ${pageHeader('Dashboard Clientes', 'Vendas manuais + Meta Ads salvos para enxergar custo por venda, ROAS e produtos vendidos por cliente.', `<button class="secondary-button" data-action="export" data-entity="vendas"><i data-lucide="download"></i>CSV vendas</button><button class="button" data-action="new" data-entity="vendas"><i data-lucide="plus"></i>Lancar venda</button>`)}
+    ${state.vendasMissingTable ? `<div class="state"><strong>Tabela de vendas ainda nao existe</strong><span>Rode a migration 20260617_vendas_cliente.sql no Supabase para salvar vendas manuais.</span></div>` : ''}
+    <section class="panel client-dashboard-filters">
+      <label>Cliente
+        <select data-action="client-dashboard-client">
+          <option value="all" ${state.dashboardClientesClienteId === 'all' ? 'selected' : ''}>Todos os clientes</option>
+          ${clientOptions}
+        </select>
+      </label>
+      <label>Inicio<input class="input" type="date" data-action="client-dashboard-since" value="${escapeHtml(range.since)}"></label>
+      <label>Fim<input class="input" type="date" data-action="client-dashboard-until" value="${escapeHtml(range.until)}"></label>
+      <div class="form-actions">
+        <button class="secondary-button" data-action="client-dashboard-preset" data-days="7" type="button">7 dias</button>
+        <button class="secondary-button" data-action="client-dashboard-preset" data-days="30" type="button">30 dias</button>
+        <button class="secondary-button" data-action="client-dashboard-preset" data-days="90" type="button">90 dias</button>
+      </div>
+    </section>
+    <section class="dashboard-area">
+      <div class="dashboard-area-header">
+        <div>
+          <span>${date(range.since)} ate ${date(range.until)}</span>
+          <h2>Resumo consolidado</h2>
+        </div>
+        <p>${rows.length} clientes na visao</p>
+      </div>
+      <div class="stats-grid compact">
+        ${statCard('Gasto Meta Ads', money(totals.spend), 'badge-dollar-sign', 'gold')}
+        ${statCard('Faturamento manual', money(totals.revenue), 'shopping-bag', 'green')}
+        ${statCard('ROAS consolidado', roas ? roas.toFixed(2) : '-', 'trending-up', roas >= 2 ? 'green' : 'gold')}
+        ${statCard('Custo por venda', costPerSale ? money(costPerSale) : '-', 'receipt', 'blue')}
+        ${statCard('Vendas', number(totals.sales), 'circle-dollar-sign', 'green')}
+        ${statCard('Produtos vendidos', number(totals.products), 'package-check', 'blue')}
+        ${statCard('Cliques', number(totals.clicks), 'mouse-pointer-click', 'blue')}
+        ${statCard('Mensagens', number(totals.messages), 'message-circle', 'green')}
+      </div>
+    </section>
+    <section class="client-dashboard-list">
+      ${rows.length ? rows.map(renderDashboardClienteRow).join('') : emptyState('Sem dados no periodo', 'Lance vendas ou salve relatorios Meta Ads para alimentar este dashboard.')}
+    </section>
+  `;
+}
+
+function renderDashboardClienteRow(row) {
+  const ctr = percentNumber(row.clicks, row.impressions);
+  const cpc = ratio(row.spend, row.clicks);
+  const costPerSale = ratio(row.spend, row.sales);
+  const roas = ratio(row.revenue, row.spend);
+  const averageTicket = ratio(row.revenue, row.sales);
+  const lastSale = row.lastSale ? date(row.lastSale) : 'Sem venda';
+  return `
+    <article class="client-metrics-card">
+      <div class="client-metrics-header">
+        <div>
+          <span>${escapeHtml(row.cliente.segmento || row.cliente.meta_ads_act || 'Cliente')}</span>
+          <h3>${escapeHtml(row.cliente.nome_empresa)}</h3>
+        </div>
+        <div class="client-metrics-actions">
+          <span class="status-badge status-${escapeHtml(row.cliente.status || 'ativo')}">${escapeHtml(label(row.cliente.status || 'ativo'))}</span>
+          <button class="secondary-button" data-action="new" data-entity="vendas" data-cliente="${row.cliente.id}" type="button"><i data-lucide="plus"></i>Venda</button>
+        </div>
+      </div>
+      <div class="client-metric-grid">
+        ${clientMetric('Gasto', money(row.spend))}
+        ${clientMetric('Faturamento', money(row.revenue))}
+        ${clientMetric('ROAS', roas ? roas.toFixed(2) : '-')}
+        ${clientMetric('Custo/venda', costPerSale ? money(costPerSale) : '-')}
+        ${clientMetric('Vendas', number(row.sales))}
+        ${clientMetric('Produtos', number(row.products))}
+        ${clientMetric('Ticket medio', averageTicket ? money(averageTicket) : '-')}
+        ${clientMetric('Ultima venda', lastSale)}
+        ${clientMetric('Impressoes', number(row.impressions))}
+        ${clientMetric('Alcance', number(row.reach))}
+        ${clientMetric('Cliques', number(row.clicks))}
+        ${clientMetric('CTR', `${ctr.toFixed(2)}%`)}
+        ${clientMetric('CPC', cpc ? money(cpc) : '-')}
+        ${clientMetric('Mensagens', number(row.messages))}
+        ${clientMetric('Leads', number(row.leads))}
+      </div>
+    </article>
+  `;
+}
+
+function clientMetric(labelText, value) {
+  return `<div class="client-metric"><span>${escapeHtml(labelText)}</span><strong>${escapeHtml(value)}</strong></div>`;
+}
+
+function getDashboardClienteRows(range) {
+  const since = String(range.since || '');
+  const until = String(range.until || '');
+  return state.clientes
+    .filter((cliente) => cliente.status !== 'cancelado')
+    .map((cliente) => {
+      const relatorios = state.relatorios.filter((relatorio) =>
+        relatorio.cliente_id === cliente.id &&
+        dateRangesOverlap(relatorio.periodo_inicio, relatorio.periodo_fim, since, until)
+      );
+      const vendas = state.vendas.filter((venda) =>
+        venda.cliente_id === cliente.id &&
+        isDateInRange(venda.data_venda, since, until)
+      );
+      const row = {
+        cliente,
+        spend: sumBy(relatorios, 'investimento'),
+        impressions: sumBy(relatorios, 'impressoes'),
+        reach: sumBy(relatorios, 'alcance'),
+        clicks: sumBy(relatorios, 'cliques'),
+        messages: sumBy(relatorios, 'mensagens'),
+        leads: sumBy(relatorios, 'leads'),
+        sales: sumBy(vendas, 'quantidade_vendas'),
+        products: sumBy(vendas, 'quantidade_produtos'),
+        revenue: sumBy(vendas, 'valor_total'),
+        lastSale: vendas.map((venda) => venda.data_venda).sort().at(-1) || '',
+      };
+      row.score = row.revenue + row.spend + row.sales + row.clicks;
+      return row;
+    })
+    .filter((row) => row.score > 0 || state.dashboardClientesClienteId !== 'all')
+    .sort((a, b) => (b.revenue || b.spend || 0) - (a.revenue || a.spend || 0));
+}
+
 function areaSummary(title, value) {
   return `<div><span>${escapeHtml(title)}</span><strong>${escapeHtml(value)}</strong></div>`;
 }
@@ -774,6 +937,29 @@ function funnelConnector(value, labelText) {
 
 function percent(part, total) {
   return total ? `${((Number(part || 0) / Number(total || 0)) * 100).toFixed(1)}%` : '0.0%';
+}
+
+function percentNumber(part, total) {
+  return total ? (Number(part || 0) / Number(total || 0)) * 100 : 0;
+}
+
+function ratio(part, total) {
+  const denominator = Number(total || 0);
+  return denominator ? Number(part || 0) / denominator : 0;
+}
+
+function sumBy(items, key) {
+  return items.reduce((sum, item) => sum + Number(item?.[key] || 0), 0);
+}
+
+function isDateInRange(value, since, until) {
+  if (!value) return false;
+  return String(value) >= String(since) && String(value) <= String(until);
+}
+
+function dateRangesOverlap(start, end, since, until) {
+  if (!start || !end) return false;
+  return String(end) >= String(since) && String(start) <= String(until);
 }
 
 function renderAlertList(overdueTasks, followups, staleReports) {
@@ -2293,6 +2479,7 @@ async function renderClienteDetail(id) {
   ]);
   const campanhas = state.campanhas.filter((item) => item.cliente_id === id);
   const relatorios = state.relatorios.filter((item) => item.cliente_id === id);
+  const vendas = state.vendas.filter((item) => item.cliente_id === id);
   const tarefas = state.tarefas.filter((item) => item.cliente_id === id);
   const progress = onboardingProgress(onboarding);
 
@@ -2316,9 +2503,9 @@ async function renderClienteDetail(id) {
       </div>
     </section>
     <div class="tabs">
-      ${['visao', 'campanhas', 'relatorios', 'tarefas', 'onboarding', 'ativos', 'observacoes'].map((tab) => `<button class="tab-button ${state.detailTab === tab ? 'active' : ''}" data-action="detail-tab" data-tab="${tab}">${labelDetailTab(tab)}</button>`).join('')}
+      ${['visao', 'campanhas', 'relatorios', 'vendas', 'tarefas', 'onboarding', 'ativos', 'observacoes'].map((tab) => `<button class="tab-button ${state.detailTab === tab ? 'active' : ''}" data-action="detail-tab" data-tab="${tab}">${labelDetailTab(tab)}</button>`).join('')}
     </div>
-    <section class="panel">${renderDetailTab(cliente, { campanhas, relatorios, tarefas, onboarding, ativos, observacoes })}</section>
+    <section class="panel">${renderDetailTab(cliente, { campanhas, relatorios, vendas, tarefas, onboarding, ativos, observacoes })}</section>
   `;
   bindGlobalActions();
   renderLucide();
@@ -2339,6 +2526,7 @@ function renderDetailTab(cliente, data) {
   }
   if (state.detailTab === 'campanhas') return miniList(data.campanhas, 'nome_campanha', 'status', 'campanhas');
   if (state.detailTab === 'relatorios') return miniList(data.relatorios, 'periodo_fim', 'roas', 'relatorios');
+  if (state.detailTab === 'vendas') return `${renderVendasMiniList(data.vendas)}<button class="button" data-action="new-related" data-entity="vendas"><i data-lucide="plus"></i>Lancar venda</button>`;
   if (state.detailTab === 'tarefas') return miniList(data.tarefas, 'titulo', 'status', 'tarefas');
   if (state.detailTab === 'ativos') return `${miniList(data.ativos, 'titulo', 'tipo', 'ativos')}<button class="button" data-action="new-related" data-entity="ativos"><i data-lucide="plus"></i>Novo ativo</button>`;
   if (state.detailTab === 'observacoes') return `${miniList(data.observacoes, 'observacao', 'tipo', 'observacoes')}<button class="button" data-action="new-related" data-entity="observacoes"><i data-lucide="plus"></i>Nova observacao</button>`;
@@ -2367,6 +2555,19 @@ function miniList(items, titleKey, statusKey, entity) {
     </tr>`).join('')}</tbody></table></div>`;
 }
 
+function renderVendasMiniList(items) {
+  if (!items.length) return emptyState('Nenhuma venda', 'Lance vendas manuais para alimentar o dashboard do cliente.');
+  return `<div class="table-wrap"><table><thead><tr><th>Data</th><th>Faturamento</th><th>Vendas</th><th>Produtos</th><th>Ticket medio</th><th></th></tr></thead><tbody>${items.map((item) => `
+    <tr>
+      <td><strong>${date(item.data_venda)}</strong><span class="muted">${escapeHtml(label(item.origem || 'manual'))}</span></td>
+      <td>${money(item.valor_total)}</td>
+      <td>${number(item.quantidade_vendas)}</td>
+      <td>${number(item.quantidade_produtos)}</td>
+      <td>${money(item.ticket_medio || ratio(item.valor_total, item.quantidade_vendas))}</td>
+      <td class="row-actions">${actionButtons('vendas', item.id)}</td>
+    </tr>`).join('')}</tbody></table></div>`;
+}
+
 function renderTablePanel(id, heads, rows) {
   return `
     <section class="table-panel" id="${id}">
@@ -2387,13 +2588,17 @@ function relatorioActionButtons(id) {
 function bindGlobalActions() {
   document.querySelectorAll('[data-action]').forEach((el) => {
     const action = el.dataset.action;
-    if (action === 'new') el.addEventListener('click', () => openForm(el.dataset.entity));
+    if (action === 'new') el.addEventListener('click', () => openForm(el.dataset.entity, null, el.dataset.cliente ? { cliente_id: el.dataset.cliente } : {}));
     if (action === 'new-related') el.addEventListener('click', () => openForm(el.dataset.entity, null, { cliente_id: state.detailClienteId }));
     if (action === 'edit') el.addEventListener('click', () => openForm(el.dataset.entity, el.dataset.id));
     if (action === 'delete') el.addEventListener('click', () => handleDelete(el.dataset.entity, el.dataset.id));
     if (action === 'export') el.addEventListener('click', () => exportEntity(el.dataset.entity));
     if (action === 'print') el.addEventListener('click', () => window.print());
     if (action === 'refresh') el.addEventListener('click', async () => { await loadAll(); render(); toast('Dados atualizados.'); });
+    if (action === 'client-dashboard-client') el.addEventListener('change', () => { state.dashboardClientesClienteId = el.value || 'all'; render(); });
+    if (action === 'client-dashboard-since') el.addEventListener('change', () => { state.dashboardClientesRange = { ...state.dashboardClientesRange, since: el.value }; render(); });
+    if (action === 'client-dashboard-until') el.addEventListener('change', () => { state.dashboardClientesRange = { ...state.dashboardClientesRange, until: el.value }; render(); });
+    if (action === 'client-dashboard-preset') el.addEventListener('click', () => { state.dashboardClientesRange = getRollingDateRange(Number(el.dataset.days || 30)); render(); });
     if (action === 'refresh-client-meta-costs') el.addEventListener('click', () => loadClientMetaCosts(true));
     if (action === 'toggle-task-status') el.addEventListener('click', () => toggleTaskStatus(el.dataset.id, el.dataset.status));
     if (action === 'open-task-detail') el.addEventListener('click', () => openTaskDetail(el.dataset.id));
@@ -3359,6 +3564,18 @@ function getFormSchema(entity) {
         { name: 'proximos_passos', label: 'Proximos passos', type: 'textarea' },
       ],
     },
+    vendas: {
+      title: 'Venda do cliente',
+      fields: [
+        clientSelect,
+        { name: 'data_venda', label: 'Data da venda', type: 'date', required: true, default: isoDate(new Date()) },
+        { name: 'valor_total', label: 'Valor total vendido', type: 'number', required: true, default: 0 },
+        { name: 'quantidade_vendas', label: 'Quantidade de vendas/pedidos', type: 'number', required: true, default: 1 },
+        { name: 'quantidade_produtos', label: 'Quantidade de produtos', type: 'number', required: true, default: 1 },
+        { name: 'origem', label: 'Origem', type: 'select', options: ['manual', 'shopify', 'woocommerce', 'crm', 'outro'], default: 'manual' },
+        { name: 'observacoes', label: 'Observacoes', type: 'textarea' },
+      ],
+    },
     tarefas: {
       title: 'Tarefa',
       fields: [
@@ -3444,6 +3661,7 @@ function getService(entity) {
     observacoes: observacaoClienteService,
     diario: diarioBordoService,
     metas: metaClienteService,
+    vendas: vendaClienteService,
   }[entity];
 }
 
@@ -3453,6 +3671,7 @@ function getEntityList(entity) {
     crm: state.leads,
     campanhas: state.campanhas,
     relatorios: state.relatorios,
+    vendas: state.vendas,
     tarefas: state.tarefas,
     diario: state.diarios,
     equipe: state.equipe,
@@ -3488,6 +3707,7 @@ function labelDetailTab(tab) {
     visao: 'Visao geral',
     campanhas: 'Campanhas',
     relatorios: 'Relatorios',
+    vendas: 'Vendas',
     tarefas: 'Tarefas',
     onboarding: 'Onboarding',
     ativos: 'Ativos',
@@ -3514,6 +3734,14 @@ function getThirtyDaysRange() {
   until.setDate(until.getDate() - 1);
   const since = new Date(until);
   since.setDate(since.getDate() - 29);
+  return { since: isoDate(since), until: isoDate(until) };
+}
+
+function getRollingDateRange(days = 30) {
+  const safeDays = Math.max(1, Number(days) || 30);
+  const until = new Date();
+  const since = new Date(until);
+  since.setDate(since.getDate() - safeDays + 1);
   return { since: isoDate(since), until: isoDate(until) };
 }
 
@@ -3549,6 +3777,7 @@ function exportEntity(entity) {
     clientes: state.clientes,
     campanhas: state.campanhas.map((item) => ({ ...item, cliente: item.clientes?.nome_empresa || getClienteName(item.cliente_id) })),
     relatorios: state.relatorios.map((item) => ({ ...item, cliente: item.clientes?.nome_empresa || getClienteName(item.cliente_id) })),
+    vendas: state.vendas.map((item) => ({ ...item, cliente: item.clientes?.nome_empresa || getClienteName(item.cliente_id) })),
     tarefas: state.tarefas.map((item) => ({ ...item, cliente: item.clientes?.nome_empresa || getClienteName(item.cliente_id) })),
     diario: state.diarios.map((item) => ({ ...item, cliente: item.clientes?.nome_empresa || getClienteName(item.cliente_id) })),
     equipe: state.equipe,
