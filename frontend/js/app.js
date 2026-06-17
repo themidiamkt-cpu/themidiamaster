@@ -843,12 +843,12 @@ function renderDashboardClienteRow(row, range) {
           ${isSalesGoal ? '' : `<button class="secondary-button" data-action="new" data-entity="vendas" data-cliente="${row.cliente.id}" type="button"><i data-lucide="plus"></i>Venda</button>`}
         </div>
       </div>
-      ${renderDashboardClienteWeeklyTable(weeks)}
+      ${renderDashboardClienteWeeklyTable(weeks, isSalesGoal)}
     </article>
   `;
 }
 
-function renderDashboardClienteWeeklyTable(weeks) {
+function renderDashboardClienteWeeklyTable(weeks, isSalesGoal = false) {
   return `
     <div class="meta-weekly-report client-weekly-report">
       <div class="meta-weekly-heading">
@@ -867,6 +867,7 @@ function renderDashboardClienteWeeklyTable(weeks) {
                 <th>Mensagens</th>
                 <th>Custo/msg</th>
                 <th>Vendas</th>
+                <th>Conv. msg/venda</th>
                 <th>Custo/venda</th>
                 <th>ROAS</th>
                 <th>CTR</th>
@@ -882,6 +883,7 @@ function renderDashboardClienteWeeklyTable(weeks) {
                   <td>${week.messages ? number(Math.round(week.messages)) : '-'}</td>
                   <td>${week.messages ? money(ratio(week.spend, week.messages)) : '-'}</td>
                   <td>${week.sales ? number(Math.round(week.sales)) : '-'}</td>
+                  <td>${!isSalesGoal && week.messages && week.sales ? `${percentNumber(week.sales, week.messages).toFixed(2)}%` : '-'}</td>
                   <td>${week.sales ? money(ratio(week.spend, week.sales)) : '-'}</td>
                   <td>${week.spend && week.revenue ? ratio(week.revenue, week.spend).toFixed(2) : '-'}</td>
                   <td>${percentNumber(week.clicks, week.impressions).toFixed(2)}%</td>
