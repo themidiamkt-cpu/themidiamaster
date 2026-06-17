@@ -12,6 +12,7 @@ import { diarioBordoService } from './services/diarioBordoService.js';
 import { alertaAnomaliaService } from './services/alertaAnomaliaService.js';
 import { metaClienteService } from './services/metaClienteService.js';
 import { vendaClienteService } from './services/vendaClienteService.js';
+import { metaAdsDailyInsightService } from './services/metaAdsDailyInsightService.js';
 import { confirmDelete, date, emptyState, escapeHtml, label, loadingState, money, number, pageHeader, renderLucide, statCard, statusBadge, toast } from './components/ui.js';
 
 const app = document.getElementById('app');
@@ -38,6 +39,8 @@ const state = {
   relatorios: [],
   vendas: [],
   vendasMissingTable: false,
+  metaAdsDailyInsights: [],
+  metaAdsDailyInsightsMissingTable: false,
   dashboardClientesClienteId: 'all',
   dashboardClientesOrigem: 'all',
   tarefas: [],
@@ -61,12 +64,6 @@ const state = {
   clientMetaCosts: {
     loading: false,
     loaded: false,
-    error: '',
-    byClienteId: {},
-  },
-  clientDashboardMeta: {
-    loading: false,
-    loadedKey: '',
     error: '',
     byClienteId: {},
   },
@@ -207,19 +204,21 @@ async function loadAll() {
     if (!canAccessView(state.view)) state.view = getDefaultView();
 
     if (isMainAdmin()) {
-      const [clientes, leads, campanhas, relatorios, vendas, tarefas, diarios, equipe, alertas, metas] = await withTimeout(Promise.all([
+      const dashboardRange = getLastMonthsBounds(4);
+      const [clientes, leads, campanhas, relatorios, vendas, metaAdsDailyInsights, tarefas, diarios, equipe, alertas, metas] = await withTimeout(Promise.all([
         clienteService.list({ order: 'nome_empresa', ascending: true }),
         leadCrmService.list(),
         campanhaService.list({ columns: '*, clientes(nome_empresa, meta_ads_act)' }),
         relatorioService.list({ columns: '*, clientes(nome_empresa, meta_ads_act)' }),
         safeVendasList(),
+        safeMetaAdsDailyInsightsList(dashboardRange.since),
         tarefaService.list({ columns: '*, clientes(nome_empresa)' }),
         safeDiaryList(),
         equipeService.list({ order: 'nome', ascending: true }),
         safeAlertasList(),
         safeList(() => metaClienteService.listAll()),
       ]), 12000, 'O Supabase demorou para carregar os dados. Mostrando o painel em modo vazio ate atualizar.');
-      Object.assign(state, { clientes, leads, campanhas, relatorios, vendas, tarefas, diarios, equipe, alertas, metas });
+      Object.assign(state, { clientes, leads, campanhas, relatorios, vendas, metaAdsDailyInsights, tarefas, diarios, equipe, alertas, metas });
       updateAlertasBadge();
       return;
     }
@@ -269,6 +268,20 @@ async function safeVendasList() {
   } catch (error) {
     if (['42P01', 'PGRST205'].includes(error?.code) || String(error?.message || '').includes('vendas_cliente')) {
       state.vendasMissingTable = true;
+      return [];
+    }
+    throw error;
+  }
+}
+
+async function safeMetaAdsDailyInsightsList(since) {
+  try {
+    const insights = await metaAdsDailyInsightService.listRecent(since);
+    state.metaAdsDailyInsightsMissingTable = false;
+    return insights;
+  } catch (error) {
+    if (['42P01', 'PGRST205'].includes(error?.code) || String(error?.message || '').includes('meta_ads_daily_insights')) {
+      state.metaAdsDailyInsightsMissingTable = true;
       return [];
     }
     throw error;
@@ -780,7 +793,6 @@ function renderDashboard() {
 
 function renderDashboardClientes() {
   const monthRange = getLastMonthsBounds(4);
-  scheduleClientDashboardMetaLoad(monthRange);
   const rows = getDashboardClienteRows(monthRange)
     .filter((row) => state.dashboardClientesClienteId === 'all' || row.cliente.id === state.dashboardClientesClienteId);
   const clientOptions = state.clientes.map((cliente) => `<option value="${cliente.id}" ${state.dashboardClientesClienteId === cliente.id ? 'selected' : ''}>${escapeHtml(cliente.nome_empresa)}</option>`).join('');
@@ -789,8 +801,7 @@ function renderDashboardClientes() {
   return `
     ${pageHeader('Dashboard Clientes', 'Comparativo dos ultimos 4 meses com Meta Ads e vendas por cliente.', `<button class="secondary-button" data-action="export" data-entity="vendas"><i data-lucide="download"></i>CSV vendas</button><button class="button" data-action="new" data-entity="vendas"><i data-lucide="plus"></i>Lancar venda</button>`)}
     ${state.vendasMissingTable ? `<div class="state"><strong>Tabela de vendas ainda nao existe</strong><span>Rode a migration 20260617_vendas_cliente.sql no Supabase para salvar vendas manuais.</span></div>` : ''}
-    ${state.clientDashboardMeta.loading ? `<div class="state state-loading"><span class="spinner"></span>Atualizando Meta Ads dos ultimos 4 meses...</div>` : ''}
-    ${state.clientDashboardMeta.error ? `<div class="state"><strong>Meta Ads</strong><span>${escapeHtml(state.clientDashboardMeta.error)}</span></div>` : ''}
+    ${state.metaAdsDailyInsightsMissingTable ? `<div class="state"><strong>Tabela Meta Ads diaria ainda nao existe</strong><span>Rode a migration meta_ads_daily_insights no Supabase e aguarde o cron preencher os dados.</span></div>` : ''}
     <section class="panel client-dashboard-filters">
       <label>Cliente
         <select data-action="client-dashboard-client">
@@ -811,7 +822,7 @@ function renderDashboardClientes() {
       </div>
     </section>
     <section class="client-dashboard-list">
-      ${rows.length ? rows.map((row) => renderDashboardClienteRow(row, monthRange)).join('') : emptyState('Sem dados nos ultimos 4 meses', 'Lance vendas ou salve relatorios Meta Ads para alimentar este dashboard.')}
+      ${rows.length ? rows.map((row) => renderDashboardClienteRow(row, monthRange)).join('') : emptyState('Sem dados nos ultimos 4 meses', 'Lance vendas ou rode a sincronizacao diaria do Meta Ads para alimentar este dashboard.')}
     </section>
   `;
 }
@@ -904,7 +915,7 @@ function getDashboardClienteMonths(cliente, range) {
 }
 
 function aggregateClientMetricsForRange(cliente, range) {
-  const liveMeta = getClientDashboardMetaMetrics(cliente.id, range);
+  const dailyInsights = getClienteMetaDailyInsightsInRange(cliente.id, range.since, range.until);
   const relatorios = getClienteRelatoriosInRange(cliente.id, range.since, range.until);
   const vendas = state.vendas.filter((venda) =>
     venda.cliente_id === cliente.id &&
@@ -925,7 +936,15 @@ function aggregateClientMetricsForRange(cliente, range) {
     sales: sumWeightedReports(relatorios, 'vendas', range.since, range.until),
     revenue: sumWeightedReports(relatorios, 'faturamento_informado', range.since, range.until),
   };
-  const meta = liveMeta || fallback;
+  const savedMeta = dailyInsights.length ? {
+    spend: sumBy(dailyInsights, 'investimento'),
+    impressions: sumBy(dailyInsights, 'impressoes'),
+    clicks: sumBy(dailyInsights, 'cliques'),
+    messages: sumBy(dailyInsights, 'mensagens'),
+    sales: sumBy(dailyInsights, 'vendas'),
+    revenue: sumBy(dailyInsights, 'faturamento'),
+  } : null;
+  const meta = savedMeta || fallback;
 
   return {
     ...range,
@@ -952,75 +971,11 @@ function matchesDashboardOrigin(origem) {
   return String(origem || '').trim() === selected;
 }
 
-function getClientDashboardMetaMetrics(clienteId, range) {
-  const summary = state.clientDashboardMeta.byClienteId[clienteId];
-  if (!summary?.weeks) return null;
-  const week = summary.weeks.find((item) => item.since === range.since && item.until === range.until);
-  return week || null;
-}
-
-function scheduleClientDashboardMetaLoad(range, force = false) {
-  if (!isMainAdmin()) return;
-  const key = `${range.since}|${range.until}|${state.dashboardClientesClienteId}|${state.dashboardClientesOrigem}`;
-  if (!force && (state.clientDashboardMeta.loading || state.clientDashboardMeta.loadedKey === key)) return;
-  if (!state.clientes.some((cliente) => cliente.meta_ads_act)) return;
-  setTimeout(() => loadClientDashboardMeta(range, key, force), 0);
-}
-
-async function loadClientDashboardMeta(range, key, force = false) {
-  if (state.clientDashboardMeta.loading) return;
-  if (!force && state.clientDashboardMeta.loadedKey === key) return;
-
-  state.clientDashboardMeta = { ...state.clientDashboardMeta, loading: true, error: '' };
-  render();
-
-  try {
-    const clientes = state.clientes
-      .filter((cliente) => cliente.meta_ads_act && cliente.status !== 'cancelado')
-      .filter((cliente) => state.dashboardClientesClienteId === 'all' || cliente.id === state.dashboardClientesClienteId);
-    const entries = await Promise.all(clientes.map(async (cliente) => {
-      try {
-        const goal = metaGoalConfig[getClientMetaGoalKey(cliente)] || metaGoalConfig.mensagens;
-        const accountId = normalizeMetaAccount(cliente.meta_ads_act);
-        const ads = await fetchMetaAds(fixedMetaAccessToken, accountId);
-        const rows = await fetchMetaInsights(fixedMetaAccessToken, accountId, range.since, range.until, goal, ads, 'monthly');
-        return [cliente.id, { weeks: summarizeClientDashboardMetaWeeks(rows, range) }];
-      } catch (error) {
-        return [cliente.id, { error: error.message || 'Falha Meta Ads' }];
-      }
-    }));
-
-    state.clientDashboardMeta = {
-      loading: false,
-      loadedKey: key,
-      error: '',
-      byClienteId: Object.fromEntries(entries),
-    };
-  } catch (error) {
-    state.clientDashboardMeta = {
-      ...state.clientDashboardMeta,
-      loading: false,
-      loadedKey: '',
-      error: error.message || 'Nao foi possivel carregar Meta Ads do Dashboard Clientes.',
-    };
-  }
-  render();
-}
-
-function summarizeClientDashboardMetaWeeks(rows, range) {
-  return buildMonthsFromRange(range).map((month) => {
-    const monthRows = rows.filter((row) => dateRangesOverlap(row.date_start || month.since, row.date_stop || row.date_start || month.until, month.since, month.until));
-    const totals = summarizeMetaRows(monthRows);
-    return {
-      ...month,
-      spend: totals.investimento,
-      impressions: totals.impressoes,
-      clicks: totals.cliques,
-      messages: totals.mensagens,
-      sales: totals.vendas || totals.resultados,
-      revenue: totals.faturamento,
-    };
-  });
+function getClienteMetaDailyInsightsInRange(clienteId, since, until) {
+  return state.metaAdsDailyInsights.filter((insight) =>
+    insight.cliente_id === clienteId &&
+    isDateInRange(insight.data, since, until)
+  );
 }
 
 function areaSummary(title, value) {
