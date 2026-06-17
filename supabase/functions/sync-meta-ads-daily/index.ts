@@ -47,9 +47,9 @@ Deno.serve(async (req) => {
 
     const token = Deno.env.get('META_ACCESS_TOKEN') || Deno.env.get('META_ADS_ACCESS_TOKEN');
     const supabaseUrl = Deno.env.get('SUPABASE_URL');
-    const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+    const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || Deno.env.get('SERVICE_ROLE_KEY');
     if (!token) throw new Error('META_ACCESS_TOKEN nao configurado nos secrets da Edge Function.');
-    if (!supabaseUrl || !serviceRoleKey) throw new Error('SUPABASE_URL ou SUPABASE_SERVICE_ROLE_KEY nao configurado.');
+    if (!supabaseUrl || !serviceRoleKey) throw new Error('SUPABASE_URL ou SERVICE_ROLE_KEY nao configurado.');
 
     const supabase = createClient(supabaseUrl, serviceRoleKey, {
       auth: { persistSession: false, autoRefreshToken: false },
