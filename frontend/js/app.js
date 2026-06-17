@@ -820,7 +820,7 @@ function renderDashboardClientes() {
       </div>
       <div class="stats-grid compact">
         ${statCard('Gasto Meta Ads', money(totals.spend), 'badge-dollar-sign', 'gold')}
-        ${statCard('Faturamento manual', money(totals.revenue), 'shopping-bag', 'green')}
+        ${statCard('Faturamento', money(totals.revenue), 'shopping-bag', 'green')}
         ${statCard('ROAS consolidado', roas ? roas.toFixed(2) : '-', 'trending-up', roas >= 2 ? 'green' : 'gold')}
         ${statCard('Custo por venda', costPerSale ? money(costPerSale) : '-', 'receipt', 'blue')}
         ${statCard('Vendas', number(totals.sales), 'circle-dollar-sign', 'green')}
@@ -842,6 +842,7 @@ function renderDashboardClienteRow(row) {
   const roas = ratio(row.revenue, row.spend);
   const averageTicket = ratio(row.revenue, row.sales);
   const lastSale = row.lastSale ? date(row.lastSale) : 'Sem venda';
+  const isSalesGoal = row.salesSource === 'meta';
   return `
     <article class="client-metrics-card">
       <div class="client-metrics-header">
@@ -850,8 +851,9 @@ function renderDashboardClienteRow(row) {
           <h3>${escapeHtml(row.cliente.nome_empresa)}</h3>
         </div>
         <div class="client-metrics-actions">
+          ${isSalesGoal ? '<span class="status-badge status-ativo">Vendas Meta Ads</span>' : ''}
           <span class="status-badge status-${escapeHtml(row.cliente.status || 'ativo')}">${escapeHtml(label(row.cliente.status || 'ativo'))}</span>
-          <button class="secondary-button" data-action="new" data-entity="vendas" data-cliente="${row.cliente.id}" type="button"><i data-lucide="plus"></i>Venda</button>
+          ${isSalesGoal ? '' : `<button class="secondary-button" data-action="new" data-entity="vendas" data-cliente="${row.cliente.id}" type="button"><i data-lucide="plus"></i>Venda</button>`}
         </div>
       </div>
       <div class="client-metric-grid">
@@ -893,6 +895,14 @@ function getDashboardClienteRows(range) {
         venda.cliente_id === cliente.id &&
         isDateInRange(venda.data_venda, since, until)
       );
+      const isSalesGoal = getClientMetaGoalKey(cliente) === 'vendas';
+      const metaSales = sumBy(relatorios, 'vendas');
+      const metaRevenue = sumBy(relatorios, 'faturamento_informado');
+      const manualSales = sumBy(vendas, 'quantidade_vendas');
+      const manualProducts = sumBy(vendas, 'quantidade_produtos');
+      const manualRevenue = sumBy(vendas, 'valor_total');
+      const sales = isSalesGoal ? metaSales : manualSales;
+      const revenue = isSalesGoal ? metaRevenue : manualRevenue;
       const row = {
         cliente,
         spend: sumBy(relatorios, 'investimento'),
@@ -901,10 +911,13 @@ function getDashboardClienteRows(range) {
         clicks: sumBy(relatorios, 'cliques'),
         messages: sumBy(relatorios, 'mensagens'),
         leads: sumBy(relatorios, 'leads'),
-        sales: sumBy(vendas, 'quantidade_vendas'),
-        products: sumBy(vendas, 'quantidade_produtos'),
-        revenue: sumBy(vendas, 'valor_total'),
-        lastSale: vendas.map((venda) => venda.data_venda).sort().at(-1) || '',
+        sales,
+        products: isSalesGoal ? (manualProducts || sales) : manualProducts,
+        revenue,
+        lastSale: isSalesGoal
+          ? relatorios.map((relatorio) => relatorio.periodo_fim).sort().at(-1) || ''
+          : vendas.map((venda) => venda.data_venda).sort().at(-1) || '',
+        salesSource: isSalesGoal ? 'meta' : 'manual',
       };
       row.score = row.revenue + row.spend + row.sales + row.clicks;
       return row;
@@ -3987,6 +4000,7 @@ async function fetchMetaInsights(token, accountId, since, until, goal, ads, time
     'ctr',
     'spend',
     'actions',
+    'action_values',
     'cost_per_action_type',
   ].join(',');
   const params = new URLSearchParams({
@@ -4036,6 +4050,7 @@ function normalizeMetaInsightRow(row, ad = null, goal = metaGoalConfig.mensagens
   const leads = extractMetaAction(row, metaGoalConfig.leads.actionTypes);
   const mensagens = extractMetaAction(row, metaGoalConfig.mensagens.actionTypes);
   const vendas = extractMetaAction(row, metaGoalConfig.vendas.actionTypes);
+  const faturamento = extractMetaActionValue(row, metaGoalConfig.vendas.actionTypes);
   return {
     campaign_id: row.campaign_id,
     campaign_name: ad?.campaign?.name || row.campaign_name,
@@ -4057,6 +4072,7 @@ function normalizeMetaInsightRow(row, ad = null, goal = metaGoalConfig.mensagens
     leads,
     mensagens,
     vendas,
+    faturamento,
     resultados,
   };
 }
@@ -4112,6 +4128,15 @@ function extractMetaAction(row, actionTypes) {
   return 0;
 }
 
+function extractMetaActionValue(row, actionTypes) {
+  const values = row.action_values || [];
+  for (const actionType of actionTypes) {
+    const found = values.find((item) => item.action_type === actionType);
+    if (found) return Number(found.value || 0);
+  }
+  return 0;
+}
+
 function summarizeMetaRows(rows) {
   const totals = rows.reduce((acc, row) => {
     acc.investimento += row.spend;
@@ -4121,9 +4146,10 @@ function summarizeMetaRows(rows) {
     acc.leads += row.leads;
     acc.mensagens += row.mensagens;
     acc.vendas += row.vendas;
+    acc.faturamento += row.faturamento;
     acc.resultados += row.resultados;
     return acc;
-  }, { investimento: 0, impressoes: 0, alcance: 0, cliques: 0, leads: 0, mensagens: 0, vendas: 0, resultados: 0 });
+  }, { investimento: 0, impressoes: 0, alcance: 0, cliques: 0, leads: 0, mensagens: 0, vendas: 0, faturamento: 0, resultados: 0 });
   totals.ctr = totals.impressoes ? (totals.cliques / totals.impressoes) * 100 : 0;
   totals.cpc = totals.cliques ? totals.investimento / totals.cliques : 0;
   totals.cpm = totals.impressoes ? (totals.investimento / totals.impressoes) * 1000 : 0;
@@ -4156,6 +4182,8 @@ async function saveMetaReport() {
       mensagens: isMensagens ? report.totals.resultados : report.totals.mensagens,
       custo_por_mensagem: Number((isMensagens ? report.totals.custo_por_resultado : report.totals.custo_por_mensagem).toFixed(2)),
       vendas: isVendas ? report.totals.resultados : report.totals.vendas,
+      faturamento_informado: isVendas ? Number(report.totals.faturamento.toFixed(2)) : 0,
+      roas: isVendas && report.totals.investimento ? Number((report.totals.faturamento / report.totals.investimento).toFixed(4)) : 0,
       meta_ads_act_snapshot: report.accountId,
       analise_estrategica: `Relatorio importado da Meta Ads API pelo The Midia Master. Objetivo: ${report.goal.label}.`,
     });
