@@ -63,6 +63,12 @@ const state = {
     error: '',
     byClienteId: {},
   },
+  clientDashboardMeta: {
+    loading: false,
+    loadedKey: '',
+    error: '',
+    byClienteId: {},
+  },
   metaAds: {
     token: fixedMetaAccessToken,
     since: initialMetaDateRange.since,
@@ -774,6 +780,7 @@ function renderDashboard() {
 function renderDashboardClientes() {
   const range = getSharedMetaDateRange();
   const weeklyRange = getFourWeekBoundsFromUntil(range.until);
+  scheduleClientDashboardMetaLoad(weeklyRange);
   const rows = getDashboardClienteRows(weeklyRange)
     .filter((row) => state.dashboardClientesClienteId === 'all' || row.cliente.id === state.dashboardClientesClienteId);
   const clientOptions = state.clientes.map((cliente) => `<option value="${cliente.id}" ${state.dashboardClientesClienteId === cliente.id ? 'selected' : ''}>${escapeHtml(cliente.nome_empresa)}</option>`).join('');
@@ -781,6 +788,8 @@ function renderDashboardClientes() {
   return `
     ${pageHeader('Dashboard Clientes', 'Resumo semanal com Meta Ads e vendas no mesmo filtro de periodo.', `<button class="secondary-button" data-action="export" data-entity="vendas"><i data-lucide="download"></i>CSV vendas</button><button class="button" data-action="new" data-entity="vendas"><i data-lucide="plus"></i>Lancar venda</button>`)}
     ${state.vendasMissingTable ? `<div class="state"><strong>Tabela de vendas ainda nao existe</strong><span>Rode a migration 20260617_vendas_cliente.sql no Supabase para salvar vendas manuais.</span></div>` : ''}
+    ${state.clientDashboardMeta.loading ? `<div class="state state-loading"><span class="spinner"></span>Atualizando Meta Ads das ultimas 4 semanas...</div>` : ''}
+    ${state.clientDashboardMeta.error ? `<div class="state"><strong>Meta Ads</strong><span>${escapeHtml(state.clientDashboardMeta.error)}</span></div>` : ''}
     <section class="panel client-dashboard-filters">
       <label>Cliente
         <select data-action="client-dashboard-client">
@@ -871,42 +880,15 @@ function renderDashboardClienteWeeklyTable(weeks) {
 }
 
 function getDashboardClienteRows(range) {
-  const since = String(range.since || '');
-  const until = String(range.until || '');
   return state.clientes
     .filter((cliente) => cliente.status !== 'cancelado')
     .map((cliente) => {
-      const relatorios = getClienteRelatoriosInRange(cliente.id, since, until);
-      const vendas = state.vendas.filter((venda) =>
-        venda.cliente_id === cliente.id &&
-        isDateInRange(venda.data_venda, since, until)
-      );
-      const isSalesGoal = getClientMetaGoalKey(cliente) === 'vendas';
-      const metaSales = sumWeightedReports(relatorios, 'vendas', since, until);
-      const metaRevenue = sumWeightedReports(relatorios, 'faturamento_informado', since, until);
-      const manualSales = sumBy(vendas, 'quantidade_vendas');
-      const manualProducts = sumBy(vendas, 'quantidade_produtos');
-      const manualRevenue = sumBy(vendas, 'valor_total');
-      const sales = isSalesGoal ? metaSales : manualSales;
-      const revenue = isSalesGoal ? metaRevenue : manualRevenue;
-      const row = {
+      const metrics = aggregateClientMetricsForRange(cliente, range);
+      return {
         cliente,
-        spend: sumWeightedReports(relatorios, 'investimento', since, until),
-        impressions: sumWeightedReports(relatorios, 'impressoes', since, until),
-        reach: sumWeightedReports(relatorios, 'alcance', since, until),
-        clicks: sumWeightedReports(relatorios, 'cliques', since, until),
-        messages: sumWeightedReports(relatorios, 'mensagens', since, until),
-        leads: sumWeightedReports(relatorios, 'leads', since, until),
-        sales,
-        products: isSalesGoal ? (manualProducts || sales) : manualProducts,
-        revenue,
-        lastSale: isSalesGoal
-          ? relatorios.map((relatorio) => relatorio.periodo_fim).sort().at(-1) || ''
-          : vendas.map((venda) => venda.data_venda).sort().at(-1) || '',
-        salesSource: isSalesGoal ? 'meta' : 'manual',
+        ...metrics,
+        score: metrics.revenue + metrics.spend + metrics.sales + metrics.clicks,
       };
-      row.score = row.revenue + row.spend + row.sales + row.clicks;
-      return row;
     })
     .filter((row) => row.score > 0 || state.dashboardClientesClienteId !== 'all')
     .sort((a, b) => (b.revenue || b.spend || 0) - (a.revenue || a.spend || 0));
@@ -917,6 +899,7 @@ function getDashboardClienteWeeks(cliente, range) {
 }
 
 function aggregateClientMetricsForRange(cliente, range) {
+  const liveMeta = getClientDashboardMetaMetrics(cliente.id, range);
   const relatorios = getClienteRelatoriosInRange(cliente.id, range.since, range.until);
   const vendas = state.vendas.filter((venda) =>
     venda.cliente_id === cliente.id &&
@@ -925,16 +908,99 @@ function aggregateClientMetricsForRange(cliente, range) {
   const isSalesGoal = getClientMetaGoalKey(cliente) === 'vendas';
   const manualSales = sumBy(vendas, 'quantidade_vendas');
   const manualRevenue = sumBy(vendas, 'valor_total');
-
-  return {
-    ...range,
+  const manualProducts = sumBy(vendas, 'quantidade_produtos');
+  const fallback = {
     spend: sumWeightedReports(relatorios, 'investimento', range.since, range.until),
     impressions: sumWeightedReports(relatorios, 'impressoes', range.since, range.until),
     clicks: sumWeightedReports(relatorios, 'cliques', range.since, range.until),
     messages: sumWeightedReports(relatorios, 'mensagens', range.since, range.until),
-    sales: isSalesGoal ? sumWeightedReports(relatorios, 'vendas', range.since, range.until) : manualSales,
-    revenue: isSalesGoal ? sumWeightedReports(relatorios, 'faturamento_informado', range.since, range.until) : manualRevenue,
+    sales: sumWeightedReports(relatorios, 'vendas', range.since, range.until),
+    revenue: sumWeightedReports(relatorios, 'faturamento_informado', range.since, range.until),
   };
+  const meta = liveMeta || fallback;
+
+  return {
+    ...range,
+    spend: meta.spend,
+    impressions: meta.impressions,
+    clicks: meta.clicks,
+    messages: meta.messages,
+    sales: isSalesGoal ? meta.sales : manualSales,
+    products: isSalesGoal ? (manualProducts || meta.sales) : manualProducts,
+    revenue: isSalesGoal ? meta.revenue : manualRevenue,
+    salesSource: isSalesGoal ? 'meta' : 'manual',
+  };
+}
+
+function getClientDashboardMetaMetrics(clienteId, range) {
+  const summary = state.clientDashboardMeta.byClienteId[clienteId];
+  if (!summary?.weeks) return null;
+  const week = summary.weeks.find((item) => item.since === range.since && item.until === range.until);
+  return week || null;
+}
+
+function scheduleClientDashboardMetaLoad(range, force = false) {
+  if (!isMainAdmin()) return;
+  const key = `${range.since}|${range.until}|${state.dashboardClientesClienteId}`;
+  if (!force && (state.clientDashboardMeta.loading || state.clientDashboardMeta.loadedKey === key)) return;
+  if (!state.clientes.some((cliente) => cliente.meta_ads_act)) return;
+  setTimeout(() => loadClientDashboardMeta(range, key, force), 0);
+}
+
+async function loadClientDashboardMeta(range, key, force = false) {
+  if (state.clientDashboardMeta.loading) return;
+  if (!force && state.clientDashboardMeta.loadedKey === key) return;
+
+  state.clientDashboardMeta = { ...state.clientDashboardMeta, loading: true, error: '' };
+  render();
+
+  try {
+    const clientes = state.clientes
+      .filter((cliente) => cliente.meta_ads_act && cliente.status !== 'cancelado')
+      .filter((cliente) => state.dashboardClientesClienteId === 'all' || cliente.id === state.dashboardClientesClienteId);
+    const entries = await Promise.all(clientes.map(async (cliente) => {
+      try {
+        const goal = metaGoalConfig[getClientMetaGoalKey(cliente)] || metaGoalConfig.mensagens;
+        const accountId = normalizeMetaAccount(cliente.meta_ads_act);
+        const ads = await fetchMetaAds(fixedMetaAccessToken, accountId);
+        const rows = await fetchMetaInsights(fixedMetaAccessToken, accountId, range.since, range.until, goal, ads, '7');
+        return [cliente.id, { weeks: summarizeClientDashboardMetaWeeks(rows, range) }];
+      } catch (error) {
+        return [cliente.id, { error: error.message || 'Falha Meta Ads' }];
+      }
+    }));
+
+    state.clientDashboardMeta = {
+      loading: false,
+      loadedKey: key,
+      error: '',
+      byClienteId: Object.fromEntries(entries),
+    };
+  } catch (error) {
+    state.clientDashboardMeta = {
+      ...state.clientDashboardMeta,
+      loading: false,
+      loadedKey: '',
+      error: error.message || 'Nao foi possivel carregar Meta Ads do Dashboard Clientes.',
+    };
+  }
+  render();
+}
+
+function summarizeClientDashboardMetaWeeks(rows, range) {
+  return buildWeeksFromRange(range).map((week) => {
+    const weekRows = rows.filter((row) => dateRangesOverlap(row.date_start || week.since, row.date_stop || row.date_start || week.until, week.since, week.until));
+    const totals = summarizeMetaRows(weekRows);
+    return {
+      ...week,
+      spend: totals.investimento,
+      impressions: totals.impressoes,
+      clicks: totals.cliques,
+      messages: totals.mensagens,
+      sales: totals.vendas || totals.resultados,
+      revenue: totals.faturamento,
+    };
+  });
 }
 
 function areaSummary(title, value) {
