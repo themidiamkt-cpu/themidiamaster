@@ -854,9 +854,9 @@ function renderDashboardClienteWeeklyTable(weeks) {
                   <td>${date(week.since)} ate ${date(week.until)}</td>
                   <td>${money(week.spend)}</td>
                   <td>${money(week.revenue)}</td>
-                  <td>${week.messages ? number(week.messages) : '-'}</td>
+                  <td>${week.messages ? number(Math.round(week.messages)) : '-'}</td>
                   <td>${week.messages ? money(ratio(week.spend, week.messages)) : '-'}</td>
-                  <td>${week.sales ? number(week.sales) : '-'}</td>
+                  <td>${week.sales ? number(Math.round(week.sales)) : '-'}</td>
                   <td>${week.sales ? money(ratio(week.spend, week.sales)) : '-'}</td>
                   <td>${week.spend && week.revenue ? ratio(week.revenue, week.spend).toFixed(2) : '-'}</td>
                   <td>${percentNumber(week.clicks, week.impressions).toFixed(2)}%</td>
@@ -876,17 +876,14 @@ function getDashboardClienteRows(range) {
   return state.clientes
     .filter((cliente) => cliente.status !== 'cancelado')
     .map((cliente) => {
-      const relatorios = state.relatorios.filter((relatorio) =>
-        relatorio.cliente_id === cliente.id &&
-        dateRangesOverlap(relatorio.periodo_inicio, relatorio.periodo_fim, since, until)
-      );
+      const relatorios = getClienteRelatoriosInRange(cliente.id, since, until);
       const vendas = state.vendas.filter((venda) =>
         venda.cliente_id === cliente.id &&
         isDateInRange(venda.data_venda, since, until)
       );
       const isSalesGoal = getClientMetaGoalKey(cliente) === 'vendas';
-      const metaSales = sumBy(relatorios, 'vendas');
-      const metaRevenue = sumBy(relatorios, 'faturamento_informado');
+      const metaSales = sumWeightedReports(relatorios, 'vendas', since, until);
+      const metaRevenue = sumWeightedReports(relatorios, 'faturamento_informado', since, until);
       const manualSales = sumBy(vendas, 'quantidade_vendas');
       const manualProducts = sumBy(vendas, 'quantidade_produtos');
       const manualRevenue = sumBy(vendas, 'valor_total');
@@ -894,12 +891,12 @@ function getDashboardClienteRows(range) {
       const revenue = isSalesGoal ? metaRevenue : manualRevenue;
       const row = {
         cliente,
-        spend: sumBy(relatorios, 'investimento'),
-        impressions: sumBy(relatorios, 'impressoes'),
-        reach: sumBy(relatorios, 'alcance'),
-        clicks: sumBy(relatorios, 'cliques'),
-        messages: sumBy(relatorios, 'mensagens'),
-        leads: sumBy(relatorios, 'leads'),
+        spend: sumWeightedReports(relatorios, 'investimento', since, until),
+        impressions: sumWeightedReports(relatorios, 'impressoes', since, until),
+        reach: sumWeightedReports(relatorios, 'alcance', since, until),
+        clicks: sumWeightedReports(relatorios, 'cliques', since, until),
+        messages: sumWeightedReports(relatorios, 'mensagens', since, until),
+        leads: sumWeightedReports(relatorios, 'leads', since, until),
         sales,
         products: isSalesGoal ? (manualProducts || sales) : manualProducts,
         revenue,
@@ -920,10 +917,7 @@ function getDashboardClienteWeeks(cliente, range) {
 }
 
 function aggregateClientMetricsForRange(cliente, range) {
-  const relatorios = state.relatorios.filter((relatorio) =>
-    relatorio.cliente_id === cliente.id &&
-    dateRangesOverlap(relatorio.periodo_inicio, relatorio.periodo_fim, range.since, range.until)
-  );
+  const relatorios = getClienteRelatoriosInRange(cliente.id, range.since, range.until);
   const vendas = state.vendas.filter((venda) =>
     venda.cliente_id === cliente.id &&
     isDateInRange(venda.data_venda, range.since, range.until)
@@ -934,12 +928,12 @@ function aggregateClientMetricsForRange(cliente, range) {
 
   return {
     ...range,
-    spend: sumBy(relatorios, 'investimento'),
-    impressions: sumBy(relatorios, 'impressoes'),
-    clicks: sumBy(relatorios, 'cliques'),
-    messages: sumBy(relatorios, 'mensagens'),
-    sales: isSalesGoal ? sumBy(relatorios, 'vendas') : manualSales,
-    revenue: isSalesGoal ? sumBy(relatorios, 'faturamento_informado') : manualRevenue,
+    spend: sumWeightedReports(relatorios, 'investimento', range.since, range.until),
+    impressions: sumWeightedReports(relatorios, 'impressoes', range.since, range.until),
+    clicks: sumWeightedReports(relatorios, 'cliques', range.since, range.until),
+    messages: sumWeightedReports(relatorios, 'mensagens', range.since, range.until),
+    sales: isSalesGoal ? sumWeightedReports(relatorios, 'vendas', range.since, range.until) : manualSales,
+    revenue: isSalesGoal ? sumWeightedReports(relatorios, 'faturamento_informado', range.since, range.until) : manualRevenue,
   };
 }
 
@@ -980,6 +974,42 @@ function ratio(part, total) {
 
 function sumBy(items, key) {
   return items.reduce((sum, item) => sum + Number(item?.[key] || 0), 0);
+}
+
+function getClienteRelatoriosInRange(clienteId, since, until) {
+  return state.relatorios.filter((relatorio) =>
+    relatorio.cliente_id === clienteId &&
+    dateRangesOverlap(relatorio.periodo_inicio, relatorio.periodo_fim, since, until)
+  );
+}
+
+function sumWeightedReports(reports, key, since, until) {
+  return reports.reduce((sum, report) => {
+    const weight = reportOverlapWeight(report.periodo_inicio, report.periodo_fim, since, until);
+    return sum + (Number(report?.[key] || 0) * weight);
+  }, 0);
+}
+
+function reportOverlapWeight(start, end, since, until) {
+  const reportDays = inclusiveDays(start, end);
+  const overlapDays = overlappingDays(start, end, since, until);
+  if (!reportDays || !overlapDays) return 0;
+  return overlapDays / reportDays;
+}
+
+function inclusiveDays(start, end) {
+  if (!start || !end) return 0;
+  const startDate = new Date(`${start}T00:00:00`);
+  const endDate = new Date(`${end}T00:00:00`);
+  const diff = Math.round((endDate.getTime() - startDate.getTime()) / 86400000) + 1;
+  return Math.max(0, diff);
+}
+
+function overlappingDays(start, end, since, until) {
+  if (!start || !end || !since || !until) return 0;
+  const overlapStart = String(start) > String(since) ? start : since;
+  const overlapEnd = String(end) < String(until) ? end : until;
+  return inclusiveDays(overlapStart, overlapEnd);
 }
 
 function isDateInRange(value, since, until) {
