@@ -778,17 +778,16 @@ function renderDashboard() {
 }
 
 function renderDashboardClientes() {
-  const range = getSharedMetaDateRange();
-  const weeklyRange = getFourWeekBoundsFromUntil(range.until);
-  scheduleClientDashboardMetaLoad(weeklyRange);
-  const rows = getDashboardClienteRows(weeklyRange)
+  const monthRange = getLastMonthsBounds(4);
+  scheduleClientDashboardMetaLoad(monthRange);
+  const rows = getDashboardClienteRows(monthRange)
     .filter((row) => state.dashboardClientesClienteId === 'all' || row.cliente.id === state.dashboardClientesClienteId);
   const clientOptions = state.clientes.map((cliente) => `<option value="${cliente.id}" ${state.dashboardClientesClienteId === cliente.id ? 'selected' : ''}>${escapeHtml(cliente.nome_empresa)}</option>`).join('');
 
   return `
-    ${pageHeader('Dashboard Clientes', 'Resumo semanal com Meta Ads e vendas no mesmo filtro de periodo.', `<button class="secondary-button" data-action="export" data-entity="vendas"><i data-lucide="download"></i>CSV vendas</button><button class="button" data-action="new" data-entity="vendas"><i data-lucide="plus"></i>Lancar venda</button>`)}
+    ${pageHeader('Dashboard Clientes', 'Comparativo dos ultimos 4 meses com Meta Ads e vendas por cliente.', `<button class="secondary-button" data-action="export" data-entity="vendas"><i data-lucide="download"></i>CSV vendas</button><button class="button" data-action="new" data-entity="vendas"><i data-lucide="plus"></i>Lancar venda</button>`)}
     ${state.vendasMissingTable ? `<div class="state"><strong>Tabela de vendas ainda nao existe</strong><span>Rode a migration 20260617_vendas_cliente.sql no Supabase para salvar vendas manuais.</span></div>` : ''}
-    ${state.clientDashboardMeta.loading ? `<div class="state state-loading"><span class="spinner"></span>Atualizando Meta Ads das ultimas 4 semanas...</div>` : ''}
+    ${state.clientDashboardMeta.loading ? `<div class="state state-loading"><span class="spinner"></span>Atualizando Meta Ads dos ultimos 4 meses...</div>` : ''}
     ${state.clientDashboardMeta.error ? `<div class="state"><strong>Meta Ads</strong><span>${escapeHtml(state.clientDashboardMeta.error)}</span></div>` : ''}
     <section class="panel client-dashboard-filters">
       <label>Cliente
@@ -797,23 +796,20 @@ function renderDashboardClientes() {
           ${clientOptions}
         </select>
       </label>
-      <label>Inicio<input class="input" type="date" data-action="client-dashboard-since" value="${escapeHtml(range.since)}"></label>
-      <label>Fim<input class="input" type="date" data-action="client-dashboard-until" value="${escapeHtml(range.until)}"></label>
-      <div class="form-actions">
-        <button class="secondary-button" data-action="client-dashboard-preset" data-days="7" type="button">7 dias</button>
-        <button class="secondary-button" data-action="client-dashboard-preset" data-days="30" type="button">30 dias</button>
-        <button class="secondary-button" data-action="client-dashboard-preset" data-days="90" type="button">90 dias</button>
+      <div class="client-dashboard-range-note">
+        <span>Periodo</span>
+        <strong>${date(monthRange.since)} ate ${date(monthRange.until)}</strong>
       </div>
     </section>
     <section class="client-dashboard-list">
-      ${rows.length ? rows.map((row) => renderDashboardClienteRow(row, weeklyRange)).join('') : emptyState('Sem dados nas ultimas 4 semanas', 'Lance vendas ou salve relatorios Meta Ads para alimentar este dashboard.')}
+      ${rows.length ? rows.map((row) => renderDashboardClienteRow(row, monthRange)).join('') : emptyState('Sem dados nos ultimos 4 meses', 'Lance vendas ou salve relatorios Meta Ads para alimentar este dashboard.')}
     </section>
   `;
 }
 
 function renderDashboardClienteRow(row, range) {
   const isSalesGoal = row.salesSource === 'meta';
-  const weeks = getDashboardClienteWeeks(row.cliente, range);
+  const months = getDashboardClienteMonths(row.cliente, range);
   return `
     <article class="client-metrics-card">
       <div class="client-metrics-header">
@@ -827,24 +823,24 @@ function renderDashboardClienteRow(row, range) {
           ${isSalesGoal ? '' : `<button class="secondary-button" data-action="new" data-entity="vendas" data-cliente="${row.cliente.id}" type="button"><i data-lucide="plus"></i>Venda</button>`}
         </div>
       </div>
-      ${renderDashboardClienteWeeklyTable(weeks)}
+      ${renderDashboardClienteMonthlyTable(months)}
     </article>
   `;
 }
 
-function renderDashboardClienteWeeklyTable(weeks) {
+function renderDashboardClienteMonthlyTable(months) {
   return `
     <div class="meta-weekly-report client-weekly-report">
       <div class="meta-weekly-heading">
-        <h3>Ultimas 4 semanas</h3>
-        <span>Resumo consolidado por semana</span>
+        <h3>Ultimos 4 meses</h3>
+        <span>Resumo consolidado por mes</span>
       </div>
       <section class="table-panel meta-table-panel meta-week-summary-panel client-week-summary-panel">
         <div class="table-wrap">
           <table>
             <thead>
               <tr>
-                <th>Semana</th>
+                <th>Mes</th>
                 <th>Periodo</th>
                 <th>Valor usado</th>
                 <th>Faturamento</th>
@@ -857,18 +853,18 @@ function renderDashboardClienteWeeklyTable(weeks) {
               </tr>
             </thead>
             <tbody>
-              ${weeks.map((week, index) => `
+              ${months.map((month) => `
                 <tr>
-                  <td><strong>Semana ${index + 1}</strong></td>
-                  <td>${date(week.since)} ate ${date(week.until)}</td>
-                  <td>${money(week.spend)}</td>
-                  <td>${money(week.revenue)}</td>
-                  <td>${week.messages ? number(Math.round(week.messages)) : '-'}</td>
-                  <td>${week.messages ? money(ratio(week.spend, week.messages)) : '-'}</td>
-                  <td>${week.sales ? number(Math.round(week.sales)) : '-'}</td>
-                  <td>${week.sales ? money(ratio(week.spend, week.sales)) : '-'}</td>
-                  <td>${week.spend && week.revenue ? ratio(week.revenue, week.spend).toFixed(2) : '-'}</td>
-                  <td>${percentNumber(week.clicks, week.impressions).toFixed(2)}%</td>
+                  <td><strong>${escapeHtml(month.label)}</strong></td>
+                  <td>${date(month.since)} ate ${date(month.until)}</td>
+                  <td>${money(month.spend)}</td>
+                  <td>${money(month.revenue)}</td>
+                  <td>${month.messages ? number(Math.round(month.messages)) : '-'}</td>
+                  <td>${month.messages ? money(ratio(month.spend, month.messages)) : '-'}</td>
+                  <td>${month.sales ? number(Math.round(month.sales)) : '-'}</td>
+                  <td>${month.sales ? money(ratio(month.spend, month.sales)) : '-'}</td>
+                  <td>${month.spend && month.revenue ? ratio(month.revenue, month.spend).toFixed(2) : '-'}</td>
+                  <td>${percentNumber(month.clicks, month.impressions).toFixed(2)}%</td>
                 </tr>
               `).join('')}
             </tbody>
@@ -894,8 +890,8 @@ function getDashboardClienteRows(range) {
     .sort((a, b) => (b.revenue || b.spend || 0) - (a.revenue || a.spend || 0));
 }
 
-function getDashboardClienteWeeks(cliente, range) {
-  return buildWeeksFromRange(range).map((week) => aggregateClientMetricsForRange(cliente, week));
+function getDashboardClienteMonths(cliente, range) {
+  return buildMonthsFromRange(range).map((month) => aggregateClientMetricsForRange(cliente, month));
 }
 
 function aggregateClientMetricsForRange(cliente, range) {
@@ -963,7 +959,7 @@ async function loadClientDashboardMeta(range, key, force = false) {
         const goal = metaGoalConfig[getClientMetaGoalKey(cliente)] || metaGoalConfig.mensagens;
         const accountId = normalizeMetaAccount(cliente.meta_ads_act);
         const ads = await fetchMetaAds(fixedMetaAccessToken, accountId);
-        const rows = await fetchMetaInsights(fixedMetaAccessToken, accountId, range.since, range.until, goal, ads, '7');
+        const rows = await fetchMetaInsights(fixedMetaAccessToken, accountId, range.since, range.until, goal, ads, 'monthly');
         return [cliente.id, { weeks: summarizeClientDashboardMetaWeeks(rows, range) }];
       } catch (error) {
         return [cliente.id, { error: error.message || 'Falha Meta Ads' }];
@@ -988,11 +984,11 @@ async function loadClientDashboardMeta(range, key, force = false) {
 }
 
 function summarizeClientDashboardMetaWeeks(rows, range) {
-  return buildWeeksFromRange(range).map((week) => {
-    const weekRows = rows.filter((row) => dateRangesOverlap(row.date_start || week.since, row.date_stop || row.date_start || week.until, week.since, week.until));
-    const totals = summarizeMetaRows(weekRows);
+  return buildMonthsFromRange(range).map((month) => {
+    const monthRows = rows.filter((row) => dateRangesOverlap(row.date_start || month.since, row.date_stop || row.date_start || month.until, month.since, month.until));
+    const totals = summarizeMetaRows(monthRows);
     return {
-      ...week,
+      ...month,
       spend: totals.investimento,
       impressions: totals.impressoes,
       clicks: totals.cliques,
@@ -2722,9 +2718,6 @@ function bindGlobalActions() {
     if (action === 'print') el.addEventListener('click', () => window.print());
     if (action === 'refresh') el.addEventListener('click', async () => { await loadAll(); render(); toast('Dados atualizados.'); });
     if (action === 'client-dashboard-client') el.addEventListener('change', () => { state.dashboardClientesClienteId = el.value || 'all'; render(); });
-    if (action === 'client-dashboard-since') el.addEventListener('change', () => { setSharedMetaDateRange({ since: el.value }); render(); });
-    if (action === 'client-dashboard-until') el.addEventListener('change', () => { setSharedMetaDateRange({ until: el.value }); render(); });
-    if (action === 'client-dashboard-preset') el.addEventListener('click', () => { setSharedMetaDateRange(getClosedDateRange(Number(el.dataset.days || 30))); render(); });
     if (action === 'refresh-client-meta-costs') el.addEventListener('click', () => loadClientMetaCosts(true));
     if (action === 'toggle-task-status') el.addEventListener('click', () => toggleTaskStatus(el.dataset.id, el.dataset.status));
     if (action === 'open-task-detail') el.addEventListener('click', () => openTaskDetail(el.dataset.id));
@@ -3864,6 +3857,36 @@ function getSharedMetaDateRange() {
     since: state.metaAds.since || initialMetaDateRange.since,
     until: state.metaAds.until || initialMetaDateRange.until,
   };
+}
+
+function getLastMonthsBounds(count = 4) {
+  const safeCount = Math.max(1, Number(count) || 4);
+  const today = new Date();
+  const until = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+  const since = new Date(today.getFullYear(), today.getMonth() - safeCount + 1, 1);
+  return { since: isoDate(since), until: isoDate(until) };
+}
+
+function buildMonthsFromRange(range) {
+  const start = new Date(`${range.since}T00:00:00`);
+  const end = new Date(`${range.until}T00:00:00`);
+  const months = [];
+  let cursor = new Date(start.getFullYear(), start.getMonth(), 1);
+  while (cursor <= end && months.length < 12) {
+    const since = new Date(cursor.getFullYear(), cursor.getMonth(), 1);
+    const until = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0);
+    months.push({
+      since: isoDate(since),
+      until: isoDate(until),
+      label: monthLabel(since),
+    });
+    cursor = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
+  }
+  return months.slice(-4);
+}
+
+function monthLabel(value) {
+  return value.toLocaleDateString('pt-BR', { month: 'short', year: 'numeric' }).replace('.', '');
 }
 
 function getFourWeekBoundsFromUntil(untilValue) {
