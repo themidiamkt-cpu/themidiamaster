@@ -38,7 +38,6 @@ const state = {
   relatorios: [],
   vendas: [],
   vendasMissingTable: false,
-  dashboardClientesRange: getRollingDateRange(30),
   dashboardClientesClienteId: 'all',
   tarefas: [],
   diarios: [],
@@ -773,7 +772,7 @@ function renderDashboard() {
 }
 
 function renderDashboardClientes() {
-  const range = state.dashboardClientesRange || getThirtyDaysRange();
+  const range = getSharedMetaDateRange();
   const rows = getDashboardClienteRows(range)
     .filter((row) => state.dashboardClientesClienteId === 'all' || row.cliente.id === state.dashboardClientesClienteId);
   const totals = rows.reduce((acc, row) => {
@@ -2609,9 +2608,9 @@ function bindGlobalActions() {
     if (action === 'print') el.addEventListener('click', () => window.print());
     if (action === 'refresh') el.addEventListener('click', async () => { await loadAll(); render(); toast('Dados atualizados.'); });
     if (action === 'client-dashboard-client') el.addEventListener('change', () => { state.dashboardClientesClienteId = el.value || 'all'; render(); });
-    if (action === 'client-dashboard-since') el.addEventListener('change', () => { state.dashboardClientesRange = { ...state.dashboardClientesRange, since: el.value }; render(); });
-    if (action === 'client-dashboard-until') el.addEventListener('change', () => { state.dashboardClientesRange = { ...state.dashboardClientesRange, until: el.value }; render(); });
-    if (action === 'client-dashboard-preset') el.addEventListener('click', () => { state.dashboardClientesRange = getRollingDateRange(Number(el.dataset.days || 30)); render(); });
+    if (action === 'client-dashboard-since') el.addEventListener('change', () => { setSharedMetaDateRange({ since: el.value }); render(); });
+    if (action === 'client-dashboard-until') el.addEventListener('change', () => { setSharedMetaDateRange({ until: el.value }); render(); });
+    if (action === 'client-dashboard-preset') el.addEventListener('click', () => { setSharedMetaDateRange(getClosedDateRange(Number(el.dataset.days || 30))); render(); });
     if (action === 'refresh-client-meta-costs') el.addEventListener('click', () => loadClientMetaCosts(true));
     if (action === 'toggle-task-status') el.addEventListener('click', () => toggleTaskStatus(el.dataset.id, el.dataset.status));
     if (action === 'open-task-detail') el.addEventListener('click', () => openTaskDetail(el.dataset.id));
@@ -2631,8 +2630,8 @@ function bindGlobalActions() {
       render();
     });
     if (action === 'meta-goal') el.addEventListener('change', () => { state.metaAds.goal = el.value; state.metaAds.report = null; });
-    if (action === 'meta-since') el.addEventListener('change', () => { state.metaAds.since = el.value; state.metaAds.report = null; });
-    if (action === 'meta-until') el.addEventListener('change', () => { state.metaAds.until = el.value; state.metaAds.report = null; });
+    if (action === 'meta-since') el.addEventListener('change', () => { setSharedMetaDateRange({ since: el.value }); state.metaAds.report = null; });
+    if (action === 'meta-until') el.addEventListener('change', () => { setSharedMetaDateRange({ until: el.value }); state.metaAds.report = null; });
     if (action === 'meta-fetch') el.addEventListener('click', fetchMetaAdsReport);
     if (action === 'meta-save-report') el.addEventListener('click', saveMetaReport);
     if (action === 'meta-back') el.addEventListener('click', () => { state.metaAds.report = null; render(); });
@@ -3733,12 +3732,31 @@ function labelOnboarding(field) {
 }
 
 function getDefaultDateRange() {
+  return getClosedDateRange(7);
+}
+
+function getClosedDateRange(days = 7) {
+  const safeDays = Math.max(1, Number(days) || 7);
   const today = new Date();
   const until = new Date(today);
   until.setDate(until.getDate() - 1);
   const since = new Date(until);
-  since.setDate(since.getDate() - 6);
+  since.setDate(since.getDate() - safeDays + 1);
   return { since: isoDate(since), until: isoDate(until) };
+}
+
+function getSharedMetaDateRange() {
+  return {
+    since: state.metaAds.since || initialMetaDateRange.since,
+    until: state.metaAds.until || initialMetaDateRange.until,
+  };
+}
+
+function setSharedMetaDateRange(patch) {
+  const current = getSharedMetaDateRange();
+  const next = { ...current, ...patch };
+  state.metaAds.since = next.since;
+  state.metaAds.until = next.until;
 }
 
 function getThirtyDaysRange() {
