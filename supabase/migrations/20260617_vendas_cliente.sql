@@ -8,7 +8,7 @@ create table if not exists public.vendas_cliente (
   ticket_medio numeric(12,2) generated always as (
     case when quantidade_vendas > 0 then valor_total / quantidade_vendas else 0 end
   ) stored,
-  origem text default 'manual' check (origem in ('manual', 'shopify', 'woocommerce', 'crm', 'outro')),
+  origem text default 'manual' check (origem in ('meta_ads', 'google_ads', 'instagram', 'whatsapp', 'site', 'loja_fisica', 'indicacao', 'organico', 'shopify', 'woocommerce', 'crm', 'manual', 'outro')),
   observacoes text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()

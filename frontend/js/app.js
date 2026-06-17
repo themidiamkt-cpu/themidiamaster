@@ -3585,7 +3585,7 @@ function getFormSchema(entity) {
         { name: 'valor_total', label: 'Valor total vendido', type: 'number', required: true, default: 0 },
         { name: 'quantidade_vendas', label: 'Quantidade de vendas/pedidos', type: 'number', required: true, default: 1 },
         { name: 'quantidade_produtos', label: 'Quantidade de produtos', type: 'number', required: true, default: 1 },
-        { name: 'origem', label: 'Origem', type: 'select', options: ['manual', 'shopify', 'woocommerce', 'crm', 'outro'], default: 'manual' },
+        { name: 'origem', label: 'Origem da venda', type: 'select', options: ['meta_ads', 'google_ads', 'instagram', 'whatsapp', 'site', 'loja_fisica', 'indicacao', 'organico', 'shopify', 'woocommerce', 'crm', 'manual', 'outro'], default: 'manual' },
         { name: 'observacoes', label: 'Observacoes', type: 'textarea' },
       ],
     },
