@@ -3207,6 +3207,14 @@ label { display: grid; gap: 7px; color: var(--muted); font-size: 12px; font-weig
   overflow-wrap: anywhere;
 }
 
+.client-weekly-report {
+  padding: 18px 20px 20px;
+}
+
+.client-week-summary-panel table {
+  min-width: 1120px;
+}
+
 @media (max-width: 1300px) {
   .client-metric-grid { grid-template-columns: repeat(4, minmax(120px, 1fr)); }
   .client-metric:nth-child(8n) { border-right: 1px solid var(--line-soft); }

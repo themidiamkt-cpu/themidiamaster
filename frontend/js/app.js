@@ -773,26 +773,13 @@ function renderDashboard() {
 
 function renderDashboardClientes() {
   const range = getSharedMetaDateRange();
-  const rows = getDashboardClienteRows(range)
+  const weeklyRange = getFourWeekBoundsFromUntil(range.until);
+  const rows = getDashboardClienteRows(weeklyRange)
     .filter((row) => state.dashboardClientesClienteId === 'all' || row.cliente.id === state.dashboardClientesClienteId);
-  const totals = rows.reduce((acc, row) => {
-    acc.spend += row.spend;
-    acc.impressions += row.impressions;
-    acc.reach += row.reach;
-    acc.clicks += row.clicks;
-    acc.messages += row.messages;
-    acc.leads += row.leads;
-    acc.sales += row.sales;
-    acc.products += row.products;
-    acc.revenue += row.revenue;
-    return acc;
-  }, { spend: 0, impressions: 0, reach: 0, clicks: 0, messages: 0, leads: 0, sales: 0, products: 0, revenue: 0 });
-  const roas = ratio(totals.revenue, totals.spend);
-  const costPerSale = ratio(totals.spend, totals.sales);
   const clientOptions = state.clientes.map((cliente) => `<option value="${cliente.id}" ${state.dashboardClientesClienteId === cliente.id ? 'selected' : ''}>${escapeHtml(cliente.nome_empresa)}</option>`).join('');
 
   return `
-    ${pageHeader('Dashboard Clientes', 'Vendas manuais + Meta Ads salvos para enxergar custo por venda, ROAS e produtos vendidos por cliente.', `<button class="secondary-button" data-action="export" data-entity="vendas"><i data-lucide="download"></i>CSV vendas</button><button class="button" data-action="new" data-entity="vendas"><i data-lucide="plus"></i>Lancar venda</button>`)}
+    ${pageHeader('Dashboard Clientes', 'Resumo semanal com Meta Ads e vendas no mesmo filtro de periodo.', `<button class="secondary-button" data-action="export" data-entity="vendas"><i data-lucide="download"></i>CSV vendas</button><button class="button" data-action="new" data-entity="vendas"><i data-lucide="plus"></i>Lancar venda</button>`)}
     ${state.vendasMissingTable ? `<div class="state"><strong>Tabela de vendas ainda nao existe</strong><span>Rode a migration 20260617_vendas_cliente.sql no Supabase para salvar vendas manuais.</span></div>` : ''}
     <section class="panel client-dashboard-filters">
       <label>Cliente
@@ -809,39 +796,15 @@ function renderDashboardClientes() {
         <button class="secondary-button" data-action="client-dashboard-preset" data-days="90" type="button">90 dias</button>
       </div>
     </section>
-    <section class="dashboard-area">
-      <div class="dashboard-area-header">
-        <div>
-          <span>${date(range.since)} ate ${date(range.until)}</span>
-          <h2>Resumo consolidado</h2>
-        </div>
-        <p>${rows.length} clientes na visao</p>
-      </div>
-      <div class="stats-grid compact">
-        ${statCard('Gasto Meta Ads', money(totals.spend), 'badge-dollar-sign', 'gold')}
-        ${statCard('Faturamento', money(totals.revenue), 'shopping-bag', 'green')}
-        ${statCard('ROAS consolidado', roas ? roas.toFixed(2) : '-', 'trending-up', roas >= 2 ? 'green' : 'gold')}
-        ${statCard('Custo por venda', costPerSale ? money(costPerSale) : '-', 'receipt', 'blue')}
-        ${statCard('Vendas', number(totals.sales), 'circle-dollar-sign', 'green')}
-        ${statCard('Produtos vendidos', number(totals.products), 'package-check', 'blue')}
-        ${statCard('Cliques', number(totals.clicks), 'mouse-pointer-click', 'blue')}
-        ${statCard('Mensagens', number(totals.messages), 'message-circle', 'green')}
-      </div>
-    </section>
     <section class="client-dashboard-list">
-      ${rows.length ? rows.map(renderDashboardClienteRow).join('') : emptyState('Sem dados no periodo', 'Lance vendas ou salve relatorios Meta Ads para alimentar este dashboard.')}
+      ${rows.length ? rows.map((row) => renderDashboardClienteRow(row, weeklyRange)).join('') : emptyState('Sem dados nas ultimas 4 semanas', 'Lance vendas ou salve relatorios Meta Ads para alimentar este dashboard.')}
     </section>
   `;
 }
 
-function renderDashboardClienteRow(row) {
-  const ctr = percentNumber(row.clicks, row.impressions);
-  const cpc = ratio(row.spend, row.clicks);
-  const costPerSale = ratio(row.spend, row.sales);
-  const roas = ratio(row.revenue, row.spend);
-  const averageTicket = ratio(row.revenue, row.sales);
-  const lastSale = row.lastSale ? date(row.lastSale) : 'Sem venda';
+function renderDashboardClienteRow(row, range) {
   const isSalesGoal = row.salesSource === 'meta';
+  const weeks = getDashboardClienteWeeks(row.cliente, range);
   return `
     <article class="client-metrics-card">
       <div class="client-metrics-header">
@@ -855,29 +818,56 @@ function renderDashboardClienteRow(row) {
           ${isSalesGoal ? '' : `<button class="secondary-button" data-action="new" data-entity="vendas" data-cliente="${row.cliente.id}" type="button"><i data-lucide="plus"></i>Venda</button>`}
         </div>
       </div>
-      <div class="client-metric-grid">
-        ${clientMetric('Gasto', money(row.spend))}
-        ${clientMetric('Faturamento', money(row.revenue))}
-        ${clientMetric('ROAS', roas ? roas.toFixed(2) : '-')}
-        ${clientMetric('Custo/venda', costPerSale ? money(costPerSale) : '-')}
-        ${clientMetric('Vendas', number(row.sales))}
-        ${clientMetric('Produtos', number(row.products))}
-        ${clientMetric('Ticket medio', averageTicket ? money(averageTicket) : '-')}
-        ${clientMetric('Ultima venda', lastSale)}
-        ${clientMetric('Impressoes', number(row.impressions))}
-        ${clientMetric('Alcance', number(row.reach))}
-        ${clientMetric('Cliques', number(row.clicks))}
-        ${clientMetric('CTR', `${ctr.toFixed(2)}%`)}
-        ${clientMetric('CPC', cpc ? money(cpc) : '-')}
-        ${clientMetric('Mensagens', number(row.messages))}
-        ${clientMetric('Leads', number(row.leads))}
-      </div>
+      ${renderDashboardClienteWeeklyTable(weeks)}
     </article>
   `;
 }
 
-function clientMetric(labelText, value) {
-  return `<div class="client-metric"><span>${escapeHtml(labelText)}</span><strong>${escapeHtml(value)}</strong></div>`;
+function renderDashboardClienteWeeklyTable(weeks) {
+  return `
+    <div class="meta-weekly-report client-weekly-report">
+      <div class="meta-weekly-heading">
+        <h3>Ultimas 4 semanas</h3>
+        <span>Resumo consolidado por semana</span>
+      </div>
+      <section class="table-panel meta-table-panel meta-week-summary-panel client-week-summary-panel">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Semana</th>
+                <th>Periodo</th>
+                <th>Valor usado</th>
+                <th>Faturamento</th>
+                <th>Mensagens</th>
+                <th>Custo/msg</th>
+                <th>Vendas</th>
+                <th>Custo/venda</th>
+                <th>ROAS</th>
+                <th>CTR</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${weeks.map((week, index) => `
+                <tr>
+                  <td><strong>Semana ${index + 1}</strong></td>
+                  <td>${date(week.since)} ate ${date(week.until)}</td>
+                  <td>${money(week.spend)}</td>
+                  <td>${money(week.revenue)}</td>
+                  <td>${week.messages ? number(week.messages) : '-'}</td>
+                  <td>${week.messages ? money(ratio(week.spend, week.messages)) : '-'}</td>
+                  <td>${week.sales ? number(week.sales) : '-'}</td>
+                  <td>${week.sales ? money(ratio(week.spend, week.sales)) : '-'}</td>
+                  <td>${week.spend && week.revenue ? ratio(week.revenue, week.spend).toFixed(2) : '-'}</td>
+                  <td>${percentNumber(week.clicks, week.impressions).toFixed(2)}%</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  `;
 }
 
 function getDashboardClienteRows(range) {
@@ -923,6 +913,34 @@ function getDashboardClienteRows(range) {
     })
     .filter((row) => row.score > 0 || state.dashboardClientesClienteId !== 'all')
     .sort((a, b) => (b.revenue || b.spend || 0) - (a.revenue || a.spend || 0));
+}
+
+function getDashboardClienteWeeks(cliente, range) {
+  return buildWeeksFromRange(range).map((week) => aggregateClientMetricsForRange(cliente, week));
+}
+
+function aggregateClientMetricsForRange(cliente, range) {
+  const relatorios = state.relatorios.filter((relatorio) =>
+    relatorio.cliente_id === cliente.id &&
+    dateRangesOverlap(relatorio.periodo_inicio, relatorio.periodo_fim, range.since, range.until)
+  );
+  const vendas = state.vendas.filter((venda) =>
+    venda.cliente_id === cliente.id &&
+    isDateInRange(venda.data_venda, range.since, range.until)
+  );
+  const isSalesGoal = getClientMetaGoalKey(cliente) === 'vendas';
+  const manualSales = sumBy(vendas, 'quantidade_vendas');
+  const manualRevenue = sumBy(vendas, 'valor_total');
+
+  return {
+    ...range,
+    spend: sumBy(relatorios, 'investimento'),
+    impressions: sumBy(relatorios, 'impressoes'),
+    clicks: sumBy(relatorios, 'cliques'),
+    messages: sumBy(relatorios, 'mensagens'),
+    sales: isSalesGoal ? sumBy(relatorios, 'vendas') : manualSales,
+    revenue: isSalesGoal ? sumBy(relatorios, 'faturamento_informado') : manualRevenue,
+  };
 }
 
 function areaSummary(title, value) {
@@ -3750,6 +3768,24 @@ function getSharedMetaDateRange() {
     since: state.metaAds.since || initialMetaDateRange.since,
     until: state.metaAds.until || initialMetaDateRange.until,
   };
+}
+
+function getFourWeekBoundsFromUntil(untilValue) {
+  const until = new Date(`${untilValue || isoDate(new Date())}T00:00:00`);
+  const since = new Date(until);
+  since.setDate(since.getDate() - 27);
+  return { since: isoDate(since), until: isoDate(until) };
+}
+
+function buildWeeksFromRange(range) {
+  const start = new Date(`${range.since}T00:00:00`);
+  return Array.from({ length: 4 }, (_, index) => {
+    const since = new Date(start);
+    since.setDate(start.getDate() + index * 7);
+    const until = new Date(since);
+    until.setDate(since.getDate() + 6);
+    return { since: isoDate(since), until: isoDate(until) };
+  });
 }
 
 function setSharedMetaDateRange(patch) {
