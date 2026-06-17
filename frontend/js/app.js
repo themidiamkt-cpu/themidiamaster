@@ -874,21 +874,34 @@ function renderDashboardClienteWeeklyTable(weeks, isSalesGoal = false) {
               </tr>
             </thead>
             <tbody>
-              ${weeks.map((week, index) => `
-                <tr>
-                  <td><strong>Semana ${index + 1}</strong></td>
-                  <td>${date(week.since)} ate ${date(week.until)}</td>
-                  <td>${money(week.spend)}</td>
-                  <td>${money(week.revenue)}</td>
-                  <td>${week.messages ? number(Math.round(week.messages)) : '-'}</td>
-                  <td>${week.messages ? money(ratio(week.spend, week.messages)) : '-'}</td>
-                  <td>${week.sales ? number(Math.round(week.sales)) : '-'}</td>
-                  <td>${!isSalesGoal && week.messages && week.sales ? `${percentNumber(week.sales, week.messages).toFixed(2)}%` : '-'}</td>
-                  <td>${week.sales ? money(ratio(week.spend, week.sales)) : '-'}</td>
-                  <td>${week.spend && week.revenue ? ratio(week.revenue, week.spend).toFixed(2) : '-'}</td>
-                  <td>${percentNumber(week.clicks, week.impressions).toFixed(2)}%</td>
-                </tr>
-              `).join('')}
+              ${weeks.map((week, index) => {
+                const previous = weeks[index - 1] || null;
+                const costPerMessage = week.messages ? ratio(week.spend, week.messages) : 0;
+                const previousCostPerMessage = previous?.messages ? ratio(previous.spend, previous.messages) : 0;
+                const conversion = !isSalesGoal && week.messages && week.sales ? percentNumber(week.sales, week.messages) : 0;
+                const previousConversion = previous && !isSalesGoal && previous.messages && previous.sales ? percentNumber(previous.sales, previous.messages) : 0;
+                const costPerSale = week.sales ? ratio(week.spend, week.sales) : 0;
+                const previousCostPerSale = previous?.sales ? ratio(previous.spend, previous.sales) : 0;
+                const roas = week.spend && week.revenue ? ratio(week.revenue, week.spend) : 0;
+                const previousRoas = previous?.spend && previous?.revenue ? ratio(previous.revenue, previous.spend) : 0;
+                const ctr = percentNumber(week.clicks, week.impressions);
+                const previousCtr = previous ? percentNumber(previous.clicks, previous.impressions) : 0;
+                return `
+                  <tr>
+                    <td><strong>Semana ${index + 1}</strong></td>
+                    <td>${date(week.since)} ate ${date(week.until)}</td>
+                    <td>${money(week.spend)}</td>
+                    <td>${trendMetric(money(week.revenue), week.revenue, previous?.revenue, true)}</td>
+                    <td>${trendMetric(week.messages ? number(Math.round(week.messages)) : '-', week.messages, previous?.messages, true)}</td>
+                    <td>${trendMetric(week.messages ? money(costPerMessage) : '-', costPerMessage, previousCostPerMessage, false)}</td>
+                    <td>${trendMetric(week.sales ? number(Math.round(week.sales)) : '-', week.sales, previous?.sales, true)}</td>
+                    <td>${trendMetric(conversion ? `${conversion.toFixed(2)}%` : '-', conversion, previousConversion, true)}</td>
+                    <td>${trendMetric(week.sales ? money(costPerSale) : '-', costPerSale, previousCostPerSale, false)}</td>
+                    <td>${trendMetric(roas ? roas.toFixed(2) : '-', roas, previousRoas, true)}</td>
+                    <td>${trendMetric(`${ctr.toFixed(2)}%`, ctr, previousCtr, true)}</td>
+                  </tr>
+                `;
+              }).join('')}
             </tbody>
           </table>
         </div>
@@ -1013,6 +1026,21 @@ function percentNumber(part, total) {
 function ratio(part, total) {
   const denominator = Number(total || 0);
   return denominator ? Number(part || 0) / denominator : 0;
+}
+
+function trendMetric(value, current, previous, higherIsBetter = true) {
+  const currentValue = Number(current || 0);
+  const previousValue = Number(previous || 0);
+  if (!previousValue || currentValue === previousValue) return `<span class="metric-trend-value">${value}</span>`;
+  const improved = higherIsBetter ? currentValue > previousValue : currentValue < previousValue;
+  const direction = currentValue > previousValue ? 'up' : 'down';
+  const labelText = improved ? 'Melhorou' : 'Piorou';
+  return `
+    <span class="metric-trend-value">
+      <span class="metric-trend metric-trend-${improved ? 'good' : 'bad'}" aria-label="${labelText}">${direction === 'up' ? '↑' : '↓'}</span>
+      <span>${value}</span>
+    </span>
+  `;
 }
 
 function sumBy(items, key) {
