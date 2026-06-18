@@ -92,11 +92,12 @@ Deno.serve(async (req) => {
         if (!goalByClientId.has(meta.cliente_id) && isGoalKey(meta.objetivo)) goalByClientId.set(meta.cliente_id, meta.objetivo);
       });
 
-    const results: Array<{ cliente: string; accountId: string; objetivo: GoalKey; rows?: number; error?: string }> = [];
+    const results: Array<{ cliente: string; accountId: string; objetivo: GoalKey; rows?: number; health?: string; error?: string }> = [];
     for (const client of filteredClients as ClientRow[]) {
       const goalKey = goalByClientId.get(client.id) || inferGoal(client);
       const accountId = normalizeMetaAccount(client.meta_ads_act || '');
       try {
+        await syncAccountHealth(supabase, token, client, accountId);
         const rows = await fetchMetaInsights(token, accountId, range.since, range.until);
         const payloads = summarizeDailyRows(rows, client, goalKey);
         if (payloads.length) {
@@ -105,8 +106,9 @@ Deno.serve(async (req) => {
             .upsert(payloads, { onConflict: 'cliente_id,meta_ads_act,data,objetivo' });
           if (error) throw error;
         }
-        results.push({ cliente: client.nome_empresa, accountId, objetivo: goalKey, rows: payloads.length });
+        results.push({ cliente: client.nome_empresa, accountId, objetivo: goalKey, rows: payloads.length, health: 'ok' });
       } catch (error) {
+        await saveAccountHealthError(supabase, client, accountId, error?.message || 'Falha ao sincronizar');
         results.push({ cliente: client.nome_empresa, accountId, objetivo: goalKey, error: error?.message || 'Falha ao sincronizar' });
       }
     }
@@ -220,6 +222,117 @@ async function fetchMetaInsights(token: string, accountId: string, since: string
   return rows;
 }
 
+async function syncAccountHealth(supabase: any, token: string, client: ClientRow, accountId: string) {
+  const [account, campaignsResult, adsetsResult, adsResult] = await Promise.all([
+    fetchMetaAccount(token, accountId),
+    safeFetchMetaDeliveryObjects(token, accountId, 'campaigns'),
+    safeFetchMetaDeliveryObjects(token, accountId, 'adsets'),
+    safeFetchMetaDeliveryObjects(token, accountId, 'ads'),
+  ]);
+  const campaigns = campaignsResult.rows;
+  const adsets = adsetsResult.rows;
+  const ads = adsResult.rows;
+  const deliveryFetchErrors = [campaignsResult.error, adsetsResult.error, adsResult.error].filter(Boolean);
+  const deliveryIssues = [...campaigns, ...adsets, ...ads].filter((item) => {
+    const status = String(item.effective_status || '');
+    const issues = Array.isArray(item.issues_info) ? item.issues_info : [];
+    return issues.length || ['WITH_ISSUES', 'DISAPPROVED', 'PENDING_REVIEW'].includes(status);
+  });
+  const payload = {
+    cliente_id: client.id,
+    meta_ads_act: accountId,
+    account_id: account.account_id || account.id || accountId.replace(/^act_/, ''),
+    account_name: account.name || null,
+    currency: account.currency || null,
+    account_status: toNullableNumber(account.account_status),
+    account_status_label: accountStatusLabel(account.account_status),
+    disable_reason: toNullableNumber(account.disable_reason),
+    disable_reason_label: disableReasonLabel(account.disable_reason),
+    funding_source_type: fundingSourceLabel(account.funding_source_details),
+    funding_source_details: account.funding_source_details || {},
+    balance_minor: toNullableNumber(account.balance),
+    amount_spent_minor: toNullableNumber(account.amount_spent),
+    spend_cap_minor: toNullableNumber(account.spend_cap),
+    prepay_balance_minor: extractPrepayBalance(account.funding_source_details),
+    effective_status: deliveryIssues.length ? 'WITH_ISSUES' : accountStatusLabel(account.account_status),
+    has_delivery_issues: deliveryIssues.length > 0 || Number(account.account_status) === 3 || Number(account.disable_reason || 0) > 0,
+    delivery_issues: deliveryIssues,
+    last_error: deliveryFetchErrors.length ? deliveryFetchErrors.join(' | ') : null,
+    raw: { account, deliverySample: deliveryIssues.slice(0, 20), deliveryFetchErrors },
+    checked_at: new Date().toISOString(),
+  };
+  const { error } = await supabase.from('meta_ads_account_health').upsert(payload, { onConflict: 'cliente_id' });
+  if (error) throw error;
+}
+
+async function saveAccountHealthError(supabase: any, client: ClientRow, accountId: string, message: string) {
+  const payload = {
+    cliente_id: client.id,
+    meta_ads_act: accountId,
+    account_id: accountId.replace(/^act_/, ''),
+    account_status_label: 'Erro',
+    effective_status: 'ERROR',
+    has_delivery_issues: true,
+    last_error: message,
+    checked_at: new Date().toISOString(),
+  };
+  await supabase.from('meta_ads_account_health').upsert(payload, { onConflict: 'cliente_id' });
+}
+
+async function fetchMetaAccount(token: string, accountId: string) {
+  const fields = [
+    'id',
+    'account_id',
+    'name',
+    'currency',
+    'account_status',
+    'disable_reason',
+    'funding_source_details',
+    'balance',
+    'amount_spent',
+    'spend_cap',
+  ].join(',');
+  return fetchMetaJson(`https://graph.facebook.com/${graphVersion}/${accountId}?${new URLSearchParams({ fields, access_token: token }).toString()}`);
+}
+
+async function fetchMetaDeliveryObjects(token: string, accountId: string, edge: 'campaigns' | 'adsets' | 'ads') {
+  const fields = ['id', 'name', 'effective_status', 'issues_info'].join(',');
+  const params = new URLSearchParams({
+    fields,
+    limit: '100',
+    access_token: token,
+  });
+  const rows = [];
+  let next = `https://graph.facebook.com/${graphVersion}/${accountId}/${edge}?${params.toString()}`;
+  let page = 0;
+  while (next && page < 5) {
+    page += 1;
+    const data = await fetchMetaJson(next);
+    rows.push(...(data.data || []).map((item: any) => ({ ...item, level: edge })));
+    next = data.paging?.next || '';
+  }
+  return rows;
+}
+
+async function safeFetchMetaDeliveryObjects(token: string, accountId: string, edge: 'campaigns' | 'adsets' | 'ads') {
+  try {
+    return { rows: await fetchMetaDeliveryObjects(token, accountId, edge), error: '' };
+  } catch (error) {
+    return { rows: [], error: `${edge}: ${error?.message || 'falha ao consultar delivery'}` };
+  }
+}
+
+async function fetchMetaJson(url: string) {
+  const response = await fetch(url);
+  const data = await response.json();
+  if (!response.ok || data.error) {
+    const err = data.error || {};
+    if (String(err.code) === '190') throw new Error('Token Meta Ads expirado ou invalido.');
+    throw new Error(err.message || `Erro Meta Ads ${response.status}`);
+  }
+  return data;
+}
+
 function summarizeDailyRows(rows: any[], client: ClientRow, goalKey: GoalKey) {
   const byDay = new Map<string, any[]>();
   rows.forEach((row) => {
@@ -291,6 +404,61 @@ function ratio(part: number, total: number, decimals = 2) {
 
 function roundMoney(value: number) {
   return Number(Number(value || 0).toFixed(2));
+}
+
+function toNullableNumber(value: unknown) {
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue : null;
+}
+
+function accountStatusLabel(value: unknown) {
+  const labels: Record<number, string> = {
+    1: 'Ativa',
+    2: 'Desativada',
+    3: 'Pagamento pendente',
+    7: 'Pendente de revisao',
+    8: 'Pendente de liquidacao',
+    9: 'Em periodo de graca',
+    100: 'Fechada',
+    101: 'Pendente de fechamento',
+  };
+  return labels[Number(value)] || (value ? `Status ${value}` : 'Sem status');
+}
+
+function disableReasonLabel(value: unknown) {
+  const labels: Record<number, string> = {
+    0: 'Sem bloqueio',
+    1: 'Conta desativada',
+    2: 'Pagamento',
+    3: 'Politica',
+    7: 'Risco',
+    8: 'Conta comprometida',
+  };
+  return labels[Number(value)] || (value ? `Motivo ${value}` : 'Sem bloqueio');
+}
+
+function fundingSourceLabel(details: any) {
+  if (!details || typeof details !== 'object') return null;
+  return details.display_string || details.type || details.funding_source_type || details.id || null;
+}
+
+function extractPrepayBalance(details: any) {
+  if (!details || typeof details !== 'object') return null;
+  const keys = ['available_balance', 'prepay_balance', 'balance', 'amount'];
+  const stack = [details];
+  while (stack.length) {
+    const current = stack.pop();
+    if (!current || typeof current !== 'object') continue;
+    for (const key of keys) {
+      const value = current[key];
+      const numeric = toNullableNumber(value);
+      if (numeric !== null) return numeric;
+    }
+    Object.values(current).forEach((value) => {
+      if (value && typeof value === 'object') stack.push(value);
+    });
+  }
+  return null;
 }
 
 function isGoalKey(value: string): value is GoalKey {

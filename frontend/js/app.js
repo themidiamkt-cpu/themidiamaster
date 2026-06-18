@@ -13,6 +13,7 @@ import { alertaAnomaliaService } from './services/alertaAnomaliaService.js';
 import { metaClienteService } from './services/metaClienteService.js';
 import { vendaClienteService } from './services/vendaClienteService.js';
 import { metaAdsDailyInsightService } from './services/metaAdsDailyInsightService.js';
+import { metaAdsAccountHealthService } from './services/metaAdsAccountHealthService.js';
 import { confirmDelete, date, emptyState, escapeHtml, label, loadingState, money, number, pageHeader, renderLucide, statCard, statusBadge, toast } from './components/ui.js';
 
 const app = document.getElementById('app');
@@ -41,6 +42,8 @@ const state = {
   vendasMissingTable: false,
   metaAdsDailyInsights: [],
   metaAdsDailyInsightsMissingTable: false,
+  metaAdsAccountHealth: [],
+  metaAdsAccountHealthMissingTable: false,
   dashboardClientesClienteId: 'all',
   dashboardClientesOrigem: 'all',
   tarefas: [],
@@ -205,20 +208,21 @@ async function loadAll() {
 
     if (isMainAdmin()) {
       const dashboardRange = getFourWeeksRange();
-      const [clientes, leads, campanhas, relatorios, vendas, metaAdsDailyInsights, tarefas, diarios, equipe, alertas, metas] = await withTimeout(Promise.all([
+      const [clientes, leads, campanhas, relatorios, vendas, metaAdsDailyInsights, metaAdsAccountHealth, tarefas, diarios, equipe, alertas, metas] = await withTimeout(Promise.all([
         clienteService.list({ order: 'nome_empresa', ascending: true }),
         leadCrmService.list(),
         campanhaService.list({ columns: '*, clientes(nome_empresa, meta_ads_act)' }),
         relatorioService.list({ columns: '*, clientes(nome_empresa, meta_ads_act)' }),
         safeVendasList(),
         safeMetaAdsDailyInsightsList(dashboardRange.since),
+        safeMetaAdsAccountHealthList(),
         tarefaService.list({ columns: '*, clientes(nome_empresa)' }),
         safeDiaryList(),
         equipeService.list({ order: 'nome', ascending: true }),
         safeAlertasList(),
         safeList(() => metaClienteService.listAll()),
       ]), 12000, 'O Supabase demorou para carregar os dados. Mostrando o painel em modo vazio ate atualizar.');
-      Object.assign(state, { clientes, leads, campanhas, relatorios, vendas, metaAdsDailyInsights, tarefas, diarios, equipe, alertas, metas });
+      Object.assign(state, { clientes, leads, campanhas, relatorios, vendas, metaAdsDailyInsights, metaAdsAccountHealth, tarefas, diarios, equipe, alertas, metas });
       updateAlertasBadge();
       return;
     }
@@ -282,6 +286,20 @@ async function safeMetaAdsDailyInsightsList(since) {
   } catch (error) {
     if (['42P01', 'PGRST205'].includes(error?.code) || String(error?.message || '').includes('meta_ads_daily_insights')) {
       state.metaAdsDailyInsightsMissingTable = true;
+      return [];
+    }
+    throw error;
+  }
+}
+
+async function safeMetaAdsAccountHealthList() {
+  try {
+    const rows = await metaAdsAccountHealthService.listLatest();
+    state.metaAdsAccountHealthMissingTable = false;
+    return rows;
+  } catch (error) {
+    if (['42P01', 'PGRST205'].includes(error?.code) || String(error?.message || '').includes('meta_ads_account_health')) {
+      state.metaAdsAccountHealthMissingTable = true;
       return [];
     }
     throw error;
@@ -1133,7 +1151,7 @@ function renderClientes() {
   return `
     ${pageHeader('Clientes', 'Cadastro completo dos clientes da agencia.', `<button class="secondary-button" data-action="refresh-client-meta-costs"><i data-lucide="refresh-cw"></i>Custo 7d Meta</button><button class="secondary-button" data-action="export" data-entity="clientes"><i data-lucide="download"></i>CSV</button><button class="button" data-action="new" data-entity="clientes"><i data-lucide="plus"></i>Novo cliente</button>`)}
     ${state.clientMetaCosts.error ? `<div class="state"><strong>Meta Ads</strong><span>${escapeHtml(state.clientMetaCosts.error)}</span></div>` : ''}
-    ${renderTablePanel('clientes', ['Empresa', 'Status', 'Plano', 'Mensalidade', 'Custo resultado 7d', 'Meta Ads', 'Responsavel', ''], state.clientes.map((cliente) => `
+    ${renderTablePanel('clientes', ['Empresa', 'Status', 'Plano', 'Mensalidade', 'Custo resultado 7d', 'Meta Ads', 'Saude conta', 'Responsavel', ''], state.clientes.map((cliente) => `
       <tr>
         <td><strong>${escapeHtml(cliente.nome_empresa)}</strong><span class="muted">${escapeHtml(cliente.segmento || cliente.cidade || '')}</span></td>
         <td>${statusBadge(cliente.status)}</td>
@@ -1141,6 +1159,7 @@ function renderClientes() {
         <td>${money(cliente.valor_mensal)}</td>
         <td>${renderClientMetaCost(cliente)}</td>
         <td>${escapeHtml(cliente.meta_ads_act || '-')}</td>
+        <td>${renderMetaAccountHealth(cliente)}</td>
         <td>${escapeHtml(cliente.responsavel_interno || cliente.responsavel || '-')}</td>
         <td class="row-actions">
           <button class="ghost-button" data-action="detail-cliente" data-id="${cliente.id}"><i data-lucide="panel-right-open"></i>Abrir</button>
@@ -1149,6 +1168,44 @@ function renderClientes() {
         </td>
       </tr>`).join(''))}
   `;
+}
+
+function renderMetaAccountHealth(cliente) {
+  if (!cliente.meta_ads_act) return '<span class="muted">Sem conta Meta</span>';
+  if (state.metaAdsAccountHealthMissingTable) return '<span class="muted">Tabela nao criada</span>';
+  const health = getMetaAccountHealth(cliente.id);
+  if (!health) return '<span class="muted">Sem leitura ainda</span>';
+  const isProblem = health.has_delivery_issues || health.effective_status === 'ERROR' || Number(health.account_status) === 3 || Number(health.disable_reason || 0) > 0;
+  const statusText = health.last_error || health.account_status_label || health.effective_status || 'Sem status';
+  const disableText = health.disable_reason_label && health.disable_reason_label !== 'Sem bloqueio' ? ` | ${health.disable_reason_label}` : '';
+  const funding = health.funding_source_type ? `Pagamento: ${health.funding_source_type}` : 'Pagamento: -';
+  const balance = health.prepay_balance_minor != null ? `Saldo pre: ${moneyFromMinor(health.prepay_balance_minor, health.currency)}` : `Saldo: ${moneyFromMinor(health.balance_minor, health.currency)}`;
+  const spendCap = health.spend_cap_minor ? `Limite: ${moneyFromMinor(health.spend_cap_minor, health.currency)}` : '';
+  return `
+    <div class="meta-health-cell">
+      <span class="meta-health-status ${isProblem ? 'meta-health-bad' : 'meta-health-good'}">${escapeHtml(statusText)}${escapeHtml(disableText)}</span>
+      <span class="muted">${escapeHtml(balance)}${spendCap ? ` | ${escapeHtml(spendCap)}` : ''}</span>
+      <span class="muted">${escapeHtml(funding)}</span>
+      ${health.has_delivery_issues ? `<span class="meta-health-issue">${number((health.delivery_issues || []).length)} issue(s) de entrega</span>` : ''}
+      <span class="muted">Atualizado: ${date(health.checked_at)}</span>
+    </div>
+  `;
+}
+
+function getMetaAccountHealth(clienteId) {
+  return state.metaAdsAccountHealth
+    .filter((item) => item.cliente_id === clienteId)
+    .sort((a, b) => String(b.checked_at || '').localeCompare(String(a.checked_at || '')))[0] || null;
+}
+
+function moneyFromMinor(value, currency = 'BRL') {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return '-';
+  const amount = numeric / 100;
+  if (currency && currency !== 'BRL') {
+    return `${currency} ${amount.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  }
+  return money(amount);
 }
 
 function renderClientMetaCost(cliente) {
