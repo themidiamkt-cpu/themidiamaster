@@ -849,6 +849,18 @@ function renderDashboardClienteRow(row, range) {
 }
 
 function renderDashboardClienteWeeklyTable(weeks, isSalesGoal = false) {
+  const total = weeks.reduce((acc, week) => {
+    acc.spend += Number(week.spend || 0);
+    acc.revenue += Number(week.revenue || 0);
+    acc.messages += Number(week.messages || 0);
+    acc.sales += Number(week.sales || 0);
+    acc.clicks += Number(week.clicks || 0);
+    acc.impressions += Number(week.impressions || 0);
+    return acc;
+  }, { spend: 0, revenue: 0, messages: 0, sales: 0, clicks: 0, impressions: 0 });
+  const totalConversion = !isSalesGoal && total.messages && total.sales ? percentNumber(total.sales, total.messages) : 0;
+  const totalRoas = total.spend && total.revenue ? ratio(total.revenue, total.spend) : 0;
+  const totalCtr = percentNumber(total.clicks, total.impressions);
   return `
     <div class="meta-weekly-report client-weekly-report">
       <div class="meta-weekly-heading">
@@ -902,6 +914,19 @@ function renderDashboardClienteWeeklyTable(weeks, isSalesGoal = false) {
                   </tr>
                 `;
               }).join('')}
+              <tr class="client-week-total-row">
+                <td><strong>Total</strong></td>
+                <td>${date(weeks[0]?.since)} ate ${date(weeks[weeks.length - 1]?.until)}</td>
+                <td>${money(total.spend)}</td>
+                <td>${money(total.revenue)}</td>
+                <td>${total.messages ? number(Math.round(total.messages)) : '-'}</td>
+                <td>${total.messages ? money(ratio(total.spend, total.messages)) : '-'}</td>
+                <td>${total.sales ? number(Math.round(total.sales)) : '-'}</td>
+                <td>${totalConversion ? `${totalConversion.toFixed(2)}%` : '-'}</td>
+                <td>${total.sales ? money(ratio(total.spend, total.sales)) : '-'}</td>
+                <td>${totalRoas ? totalRoas.toFixed(2) : '-'}</td>
+                <td>${totalCtr.toFixed(2)}%</td>
+              </tr>
             </tbody>
           </table>
         </div>

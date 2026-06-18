@@ -3238,6 +3238,16 @@ label { display: grid; gap: 7px; color: var(--muted); font-size: 12px; font-weig
   min-width: 1240px;
 }
 
+.client-week-total-row td {
+  background: #f8fafc;
+  border-top: 2px solid var(--line);
+  font-weight: 900;
+}
+
+.client-week-total-row td:first-child {
+  color: var(--brand);
+}
+
 .metric-trend-value {
   display: inline-flex;
   align-items: center;
