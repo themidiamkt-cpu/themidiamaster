@@ -103,7 +103,6 @@ function normalizeLeadPayload(payload: Record<string, any>) {
   const fromMe = Boolean(key.fromMe || data.fromMe || payload.fromMe);
   const isGroup = String(remoteJid).includes('@g.us');
   const isBroadcast = String(remoteJid).includes('status@broadcast');
-  if (fromMe) return { ignore: 'Mensagem enviada pela propria conta.' };
   if (isGroup) return { ignore: 'Mensagem de grupo ignorada.' };
   if (isBroadcast) return { ignore: 'Status/broadcast ignorado.' };
 
@@ -132,12 +131,15 @@ function normalizeLeadPayload(payload: Record<string, any>) {
     whatsapp
   );
   const responsavel = firstFilled(payload.responsavel, payload.contato, data.pushName, data.senderName, data.name, name);
-  const origin = firstFilled(payload.origem_lead, payload.origem, payload.source, data.origem_lead, data.source, payload.event, 'WhatsApp');
+  const origin = fromMe
+    ? 'WhatsApp - Prospeccao ativa'
+    : firstFilled(payload.origem_lead, payload.origem, payload.source, data.origem_lead, data.source, payload.event, 'WhatsApp');
   const sourceLine = payload.event || payload.type || data.messageType || 'webhook';
   const notes = [
     messageText ? `Mensagem: ${messageText}` : '',
     sourceLine ? `Evento: ${sourceLine}` : '',
     payload.instance ? `Instancia: ${payload.instance}` : '',
+    fromMe ? 'Direcao: mensagem enviada pela equipe' : 'Direcao: mensagem recebida do contato',
   ].filter(Boolean).join('\n');
 
   return {
