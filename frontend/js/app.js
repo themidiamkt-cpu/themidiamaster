@@ -14,6 +14,7 @@ import { metaClienteService } from './services/metaClienteService.js';
 import { vendaClienteService } from './services/vendaClienteService.js';
 import { metaAdsDailyInsightService } from './services/metaAdsDailyInsightService.js';
 import { metaAdsAccountHealthService } from './services/metaAdsAccountHealthService.js';
+import { gmnAnaliseService } from './services/gmnAnaliseService.js';
 import { confirmDelete, date, emptyState, escapeHtml, label, loadingState, money, number, pageHeader, renderLucide, statCard, statusBadge, toast } from './components/ui.js';
 
 const app = document.getElementById('app');
@@ -44,6 +45,8 @@ const state = {
   metaAdsDailyInsightsMissingTable: false,
   metaAdsAccountHealth: [],
   metaAdsAccountHealthMissingTable: false,
+  gmnAnalises: [],
+  gmnAnalisesMissingTable: false,
   dashboardClientesClienteId: 'all',
   dashboardClientesOrigem: 'all',
   tarefas: [],
@@ -81,6 +84,7 @@ const state = {
     error: '',
     report: null,
     viewMode: 'cards',
+    tab: 'consulta',
   },
   gbp: {
     clienteId: '',
@@ -93,6 +97,8 @@ const state = {
     loading: false,
     error: '',
     report: null,
+    tab: 'nova',
+    selectedSavedId: null,
   },
   googleAds: {
     loading: false,
@@ -208,7 +214,7 @@ async function loadAll() {
 
     if (isMainAdmin()) {
       const dashboardRange = getFourWeeksRange();
-      const [clientes, leads, campanhas, relatorios, vendas, metaAdsDailyInsights, metaAdsAccountHealth, tarefas, diarios, equipe, alertas, metas] = await withTimeout(Promise.all([
+      const [clientes, leads, campanhas, relatorios, vendas, metaAdsDailyInsights, metaAdsAccountHealth, gmnAnalises, tarefas, diarios, equipe, alertas, metas] = await withTimeout(Promise.all([
         clienteService.list({ order: 'nome_empresa', ascending: true }),
         leadCrmService.list(),
         campanhaService.list({ columns: '*, clientes(nome_empresa, meta_ads_act)' }),
@@ -216,13 +222,14 @@ async function loadAll() {
         safeVendasList(),
         safeMetaAdsDailyInsightsList(dashboardRange.since),
         safeMetaAdsAccountHealthList(),
+        safeGmnAnalisesList(),
         tarefaService.list({ columns: '*, clientes(nome_empresa)' }),
         safeDiaryList(),
         equipeService.list({ order: 'nome', ascending: true }),
         safeAlertasList(),
         safeList(() => metaClienteService.listAll()),
       ]), 12000, 'O Supabase demorou para carregar os dados. Mostrando o painel em modo vazio ate atualizar.');
-      Object.assign(state, { clientes, leads, campanhas, relatorios, vendas, metaAdsDailyInsights, metaAdsAccountHealth, tarefas, diarios, equipe, alertas, metas });
+      Object.assign(state, { clientes, leads, campanhas, relatorios, vendas, metaAdsDailyInsights, metaAdsAccountHealth, gmnAnalises, tarefas, diarios, equipe, alertas, metas });
       updateAlertasBadge();
       return;
     }
@@ -306,6 +313,20 @@ async function safeMetaAdsAccountHealthList() {
   }
 }
 
+async function safeGmnAnalisesList() {
+  try {
+    const rows = await gmnAnaliseService.list({ columns: '*, clientes(nome_empresa, meta_ads_act)' });
+    state.gmnAnalisesMissingTable = false;
+    return rows;
+  } catch (error) {
+    if (['42P01', 'PGRST205'].includes(error?.code) || String(error?.message || '').includes('gmn_analises')) {
+      state.gmnAnalisesMissingTable = true;
+      return [];
+    }
+    throw error;
+  }
+}
+
 function updateAlertasBadge() {
   const badge = document.getElementById('alertasBadge');
   if (!badge) return;
@@ -345,7 +366,7 @@ function getAllowedViews() {
 }
 
 function getDefaultView() {
-  return isMainAdmin() ? 'dashboard' : 'relatorios';
+  return isMainAdmin() ? 'dashboard' : 'metaAds';
 }
 
 function canAccessView(view) {
@@ -1358,16 +1379,25 @@ function renderCampanhas() {
 }
 
 function renderRelatorios() {
+  state.metaAds.tab = 'relatorios';
+  return renderMetaAds();
+}
+
+function renderRelatoriosSalvos() {
   return `
     ${pageHeader('Relatorios', 'Lancamento manual preparado para Meta Ads API no futuro.', `<button class="secondary-button" data-action="print"><i data-lucide="printer"></i>PDF</button><button class="secondary-button" data-action="export" data-entity="relatorios"><i data-lucide="download"></i>CSV</button><button class="button" data-action="new" data-entity="relatorios"><i data-lucide="plus"></i>Novo relatorio</button>`)}
-    ${renderTablePanel('relatorios', ['Cliente', 'Periodo', 'Meta Ads', ''], state.relatorios.map((relatorio) => `
+    ${renderRelatoriosTable()}
+  `;
+}
+
+function renderRelatoriosTable() {
+  return renderTablePanel('relatorios', ['Cliente', 'Periodo', 'Meta Ads', ''], state.relatorios.map((relatorio) => `
       <tr class="${state.lastSavedRelatorioId === relatorio.id ? 'row-highlight' : ''}">
         <td>${escapeHtml(relatorio.clientes?.nome_empresa || getClienteName(relatorio.cliente_id))}</td>
         <td>${date(relatorio.periodo_inicio)} ate ${date(relatorio.periodo_fim)}</td>
         <td>${escapeHtml(relatorio.meta_ads_act_snapshot || '-')}</td>
         <td class="row-actions">${relatorioActionButtons(relatorio.id)}</td>
-      </tr>`).join(''))}
-  `;
+      </tr>`).join(''));
 }
 
 function renderRelatorioDetail(id) {
@@ -1424,37 +1454,58 @@ function renderMetaAds() {
   const report = state.metaAds.report;
   const missingLegacy = legacyMetaAdsClients.filter((legacy) => !state.clientes.some((cliente) => normalizeMetaAccount(cliente.meta_ads_act) === legacy.meta_ads_act));
   const headerActions = `${isMainAdmin() ? `<button class="secondary-button" data-action="import-meta-clients"><i data-lucide="users-round"></i>Importar clientes (${missingLegacy.length})</button>` : ''}<button class="secondary-button" data-action="print"><i data-lucide="printer"></i>PDF</button>`;
+  if (!state.metaAds.tab) state.metaAds.tab = 'consulta';
   return `
     <div class="screen-only">${pageHeader('Relatórios Meta Ads', 'Modulo dedicado ao projeto Relatorios meta ads, agora conectado aos clientes do The Midia Master.', headerActions)}</div>
-    <section class="panel screen-only">
-      <div class="panel-header"><h2>Consulta Meta Ads API</h2>${statusBadge('ativo')}</div>
-      <div class="form-grid">
-        <div class="token-fixed-box">
-          <span>Access token Meta Ads</span>
-          <strong>Token fixo configurado</strong>
-          <small>Usado automaticamente nas consultas. Nao aparece nos PDFs.</small>
+    <div class="screen-only section-tabs">
+      <button class="tab-button ${state.metaAds.tab === 'consulta' ? 'active' : ''}" data-action="meta-tab" data-tab="consulta">Consulta Meta Ads</button>
+      <button class="tab-button ${state.metaAds.tab === 'relatorios' ? 'active' : ''}" data-action="meta-tab" data-tab="relatorios">Relatorios salvos</button>
+    </div>
+    ${state.metaAds.tab === 'relatorios' ? `
+      <section class="panel">
+        <div class="panel-header">
+          <div>
+            <h2>Relatorios salvos</h2>
+            <p class="muted">Relatorios salvos a partir da Meta Ads API ou lancados manualmente.</p>
+          </div>
+          <div class="row-actions">
+            <button class="secondary-button" data-action="export" data-entity="relatorios"><i data-lucide="download"></i>CSV</button>
+            <button class="button" data-action="new" data-entity="relatorios"><i data-lucide="plus"></i>Novo relatorio</button>
+          </div>
         </div>
-        <label>Cliente
-          <select data-action="meta-client">
-            <option value="">Selecione um cliente</option>
-            ${clientesComMeta.map((cliente) => `<option value="${cliente.id}" ${state.metaAds.clienteId === cliente.id ? 'selected' : ''}>${escapeHtml(cliente.nome_empresa)} - ${escapeHtml(cliente.meta_ads_act)}</option>`).join('')}
-          </select>
-        </label>
-        <label>Objetivo do relatorio
-          <select data-action="meta-goal">
-            ${Object.entries(metaGoalConfig).map(([key, cfg]) => `<option value="${key}" ${state.metaAds.goal === key ? 'selected' : ''}>${cfg.label}</option>`).join('')}
-          </select>
-        </label>
-        <label>Inicio<input class="input" type="date" data-action="meta-since" value="${escapeHtml(state.metaAds.since)}"></label>
-        <label>Fim<input class="input" type="date" data-action="meta-until" value="${escapeHtml(state.metaAds.until)}"></label>
-        <div class="form-actions">
-          <button class="button" data-action="meta-fetch" type="button"><i data-lucide="refresh-cw"></i>Buscar dados</button>
+        ${renderRelatoriosTable()}
+      </section>
+    ` : `
+      <section class="panel screen-only">
+        <div class="panel-header"><h2>Consulta Meta Ads API</h2>${statusBadge('ativo')}</div>
+        <div class="form-grid">
+          <div class="token-fixed-box">
+            <span>Access token Meta Ads</span>
+            <strong>Token fixo configurado</strong>
+            <small>Usado automaticamente nas consultas. Nao aparece nos PDFs.</small>
+          </div>
+          <label>Cliente
+            <select data-action="meta-client">
+              <option value="">Selecione um cliente</option>
+              ${clientesComMeta.map((cliente) => `<option value="${cliente.id}" ${state.metaAds.clienteId === cliente.id ? 'selected' : ''}>${escapeHtml(cliente.nome_empresa)} - ${escapeHtml(cliente.meta_ads_act)}</option>`).join('')}
+            </select>
+          </label>
+          <label>Objetivo do relatorio
+            <select data-action="meta-goal">
+              ${Object.entries(metaGoalConfig).map(([key, cfg]) => `<option value="${key}" ${state.metaAds.goal === key ? 'selected' : ''}>${cfg.label}</option>`).join('')}
+            </select>
+          </label>
+          <label>Inicio<input class="input" type="date" data-action="meta-since" value="${escapeHtml(state.metaAds.since)}"></label>
+          <label>Fim<input class="input" type="date" data-action="meta-until" value="${escapeHtml(state.metaAds.until)}"></label>
+          <div class="form-actions">
+            <button class="button" data-action="meta-fetch" type="button"><i data-lucide="refresh-cw"></i>Buscar dados</button>
+          </div>
         </div>
-      </div>
-      ${state.metaAds.loading ? loadingState('Consultando Meta Ads...') : ''}
-      ${state.metaAds.error ? `<div class="state"><strong>Erro na Meta Ads API</strong><span>${escapeHtml(state.metaAds.error)}</span></div>` : ''}
-    </section>
-    ${report ? renderMetaReport(report) : emptyState('Nenhum relatorio carregado', clientesComMeta.length ? 'Selecione cliente, periodo e token para buscar dados reais.' : 'Cadastre o meta_ads_act em ao menos um cliente.')}
+        ${state.metaAds.loading ? loadingState('Consultando Meta Ads...') : ''}
+        ${state.metaAds.error ? `<div class="state"><strong>Erro na Meta Ads API</strong><span>${escapeHtml(state.metaAds.error)}</span></div>` : ''}
+      </section>
+      ${report ? renderMetaReport(report) : emptyState('Nenhum relatorio carregado', clientesComMeta.length ? 'Selecione cliente, periodo e token para buscar dados reais.' : 'Cadastre o meta_ads_act em ao menos um cliente.')}
+    `}
   `;
 }
 
@@ -1815,61 +1866,103 @@ function metaAdMetric(labelText, value) {
 
 function renderGbp() {
   const report = state.gbp.report;
+  if (!state.gbp.tab) state.gbp.tab = 'nova';
+  const selectedSaved = state.gmnAnalises.find((item) => item.id === state.gbp.selectedSavedId);
   return `
     ${pageHeader('GMN Análises', 'Modulo dedicado a analises locais do Google Meu Negocio.')}
-    <section class="panel gbp-control-panel">
-      <div class="panel-header"><h2>Analise local do perfil</h2>${statusBadge('em_andamento')}</div>
-      <p class="muted">Localiza o perfil no Google Places, cria uma grade ao redor do ponto escolhido e mede a posicao do negocio nos 20 primeiros resultados para a palavra-chave.</p>
-      <div class="form-grid">
-        <label>Perfil, nome, endereco ou link Maps
-          <input class="input" data-action="gbp-query" value="${escapeHtml(state.gbp.businessQuery)}" placeholder="Ex: The Midia Marketing Campinas">
-        </label>
-        <label>Palavra-chave
-          <input class="input" data-action="gbp-keyword" value="${escapeHtml(state.gbp.keyword)}" placeholder="Ex: agencia de marketing">
-        </label>
-        <label>Raio
-          <select data-action="gbp-radius">
-            ${[
-              ['0.5', '0,5 km'],
-              ['1', '1 km'],
-              ['2', '2 km'],
-              ['3', '3 km'],
-              ['5', '5 km'],
-              ['10', '10 km'],
-            ].map(([value, text]) => `<option value="${value}" ${Number(state.gbp.radiusKm) === Number(value) ? 'selected' : ''}>${text}</option>`).join('')}
-          </select>
-        </label>
-        <label>Centro da grade opcional
-          <input class="input" data-action="gbp-center" value="${escapeHtml(state.gbp.searchCenter)}" placeholder="URL do Maps com @lat,lng ou lat,lng">
-        </label>
-        <label>Raio por busca
-          <select data-action="gbp-search-radius">
-            ${[
-              ['', 'Auto'],
-              ['500', '500 m'],
-              ['1000', '1 km'],
-              ['1500', '1,5 km'],
-              ['3000', '3 km'],
-            ].map(([value, text]) => `<option value="${value}" ${String(state.gbp.searchRadiusMeters) === value ? 'selected' : ''}>${text}</option>`).join('')}
-          </select>
-        </label>
-        <label>Grade
-          <select data-action="gbp-grid">
-            ${[3, 5, 7, 9].map((size) => `<option value="${size}" ${Number(state.gbp.gridSize) === size ? 'selected' : ''}>${size} x ${size}</option>`).join('')}
-          </select>
-        </label>
-        <div class="form-actions">
-          <button class="button" data-action="gbp-fetch" type="button"><i data-lucide="map-pinned"></i>Gerar diagnostico</button>
+    <div class="section-tabs">
+      <button class="tab-button ${state.gbp.tab === 'nova' ? 'active' : ''}" data-action="gbp-tab" data-tab="nova">Nova analise</button>
+      <button class="tab-button ${state.gbp.tab === 'salvas' ? 'active' : ''}" data-action="gbp-tab" data-tab="salvas">Analises salvas</button>
+    </div>
+    ${state.gbp.tab === 'salvas' ? `
+      <section class="panel">
+        <div class="panel-header">
+          <div>
+            <h2>Analises salvas</h2>
+            <p class="muted">${state.gmnAnalises.length} diagnostico(s) armazenados.</p>
+          </div>
         </div>
-      </div>
-      ${state.gbp.loading ? loadingState('Consultando Google Places...') : ''}
-      ${state.gbp.error ? `<div class="state"><strong>Erro no GMN</strong><span>${escapeHtml(state.gbp.error)}</span></div>` : ''}
-    </section>
-    ${report ? renderGbpReport(report) : emptyState('Nenhum diagnostico gerado', 'Preencha os dados acima e gere a analise local do perfil.')}
+        ${renderGbpSavedList()}
+      </section>
+      ${selectedSaved ? renderGbpReport(selectedSaved.report || {}, { saved: true }) : ''}
+    ` : `
+      <section class="panel gbp-control-panel">
+        <div class="panel-header"><h2>Analise local do perfil</h2>${statusBadge('em_andamento')}</div>
+        <p class="muted">Localiza o perfil no Google Places, cria uma grade ao redor do ponto escolhido e mede a posicao do negocio nos 20 primeiros resultados para a palavra-chave.</p>
+        <div class="form-grid">
+          <label>Cliente
+            <select data-action="gbp-client">
+              <option value="">Sem cliente vinculado</option>
+              ${state.clientes.map((cliente) => `<option value="${cliente.id}" ${state.gbp.clienteId === cliente.id ? 'selected' : ''}>${escapeHtml(cliente.nome_empresa)}</option>`).join('')}
+            </select>
+          </label>
+          <label>Perfil, nome, endereco ou link Maps
+            <input class="input" data-action="gbp-query" value="${escapeHtml(state.gbp.businessQuery)}" placeholder="Ex: The Midia Marketing Campinas">
+          </label>
+          <label>Palavra-chave
+            <input class="input" data-action="gbp-keyword" value="${escapeHtml(state.gbp.keyword)}" placeholder="Ex: agencia de marketing">
+          </label>
+          <label>Raio
+            <select data-action="gbp-radius">
+              ${[
+                ['0.5', '0,5 km'],
+                ['1', '1 km'],
+                ['2', '2 km'],
+                ['3', '3 km'],
+                ['5', '5 km'],
+                ['10', '10 km'],
+              ].map(([value, text]) => `<option value="${value}" ${Number(state.gbp.radiusKm) === Number(value) ? 'selected' : ''}>${text}</option>`).join('')}
+            </select>
+          </label>
+          <label>Centro da grade opcional
+            <input class="input" data-action="gbp-center" value="${escapeHtml(state.gbp.searchCenter)}" placeholder="URL do Maps com @lat,lng ou lat,lng">
+          </label>
+          <label>Raio por busca
+            <select data-action="gbp-search-radius">
+              ${[
+                ['', 'Auto'],
+                ['500', '500 m'],
+                ['1000', '1 km'],
+                ['1500', '1,5 km'],
+                ['3000', '3 km'],
+              ].map(([value, text]) => `<option value="${value}" ${String(state.gbp.searchRadiusMeters) === value ? 'selected' : ''}>${text}</option>`).join('')}
+            </select>
+          </label>
+          <label>Grade
+            <select data-action="gbp-grid">
+              ${[3, 5, 7, 9].map((size) => `<option value="${size}" ${Number(state.gbp.gridSize) === size ? 'selected' : ''}>${size} x ${size}</option>`).join('')}
+            </select>
+          </label>
+          <div class="form-actions">
+            <button class="button" data-action="gbp-fetch" type="button"><i data-lucide="map-pinned"></i>Gerar diagnostico</button>
+          </div>
+        </div>
+        ${state.gbp.loading ? loadingState('Consultando Google Places...') : ''}
+        ${state.gbp.error ? `<div class="state"><strong>Erro no GMN</strong><span>${escapeHtml(state.gbp.error)}</span></div>` : ''}
+      </section>
+      ${report ? renderGbpReport(report) : emptyState('Nenhum diagnostico gerado', 'Preencha os dados acima e gere a analise local do perfil.')}
+    `}
   `;
 }
 
-function renderGbpReport(report) {
+function renderGbpSavedList() {
+  if (state.gmnAnalisesMissingTable) return emptyState('Tabela nao criada', 'Aguarde a migration de analises GMN ser aplicada no Supabase.');
+  if (!state.gmnAnalises.length) return emptyState('Nenhuma analise salva', 'Gere um diagnostico e clique em Salvar analise.');
+  return renderTablePanel('gmn-analises', ['Perfil', 'Cliente', 'Palavra-chave', 'Score', 'Gerado em', ''], state.gmnAnalises.map((item) => `
+    <tr class="${state.gbp.selectedSavedId === item.id ? 'row-highlight' : ''}">
+      <td><strong>${escapeHtml(item.nome_perfil)}</strong><span class="muted">${escapeHtml(item.endereco || '')}</span></td>
+      <td>${escapeHtml(item.clientes?.nome_empresa || getClienteName(item.cliente_id) || '-')}</td>
+      <td>${escapeHtml(item.palavra_chave || '-')}</td>
+      <td><strong>${Number(item.score || item.saude_perfil || 0).toFixed(0)}%</strong></td>
+      <td>${date(item.gerado_em || item.created_at)}</td>
+      <td class="row-actions">
+        <button class="ghost-button" data-action="gbp-saved-open" data-id="${item.id}"><i data-lucide="eye"></i>Abrir</button>
+        <button class="icon-button" data-action="gbp-saved-delete" data-id="${item.id}" aria-label="Excluir"><i data-lucide="trash-2"></i></button>
+      </td>
+    </tr>`).join(''));
+}
+
+function renderGbpReport(report, options = {}) {
   const center = report.center || report.details?.location || {};
   const centerSource = report.centerSource === 'business' ? 'endereco do estabelecimento' : report.centerSource === 'url' ? 'URL do Google Maps' : 'coordenadas manuais';
   const generatedAt = report.generatedAt ? new Date(report.generatedAt).toLocaleString('pt-BR') : '-';
@@ -1877,6 +1970,7 @@ function renderGbpReport(report) {
   return `
     <section class="print-section gbp-report">
       <div class="gbp-report-actions screen-only">
+        ${options.saved ? '' : `<button class="secondary-button" data-action="gbp-save-report"><i data-lucide="save"></i>Salvar analise</button>`}
         <button class="button" data-action="print"><i data-lucide="printer"></i>Salvar em PDF</button>
       </div>
 
@@ -2816,7 +2910,7 @@ function bindGlobalActions() {
     if (action === 'detail-cliente') el.addEventListener('click', () => { state.detailClienteId = el.dataset.id; state.detailTab = 'visao'; render(); });
     if (action === 'back-clientes') el.addEventListener('click', () => { state.detailClienteId = null; state.view = 'clientes'; render(); });
     if (action === 'view-relatorio') el.addEventListener('click', () => { state.detailRelatorioId = el.dataset.id; render(); });
-    if (action === 'back-relatorios') el.addEventListener('click', () => { state.detailRelatorioId = null; state.view = 'relatorios'; render(); });
+    if (action === 'back-relatorios') el.addEventListener('click', () => { state.detailRelatorioId = null; state.metaAds.tab = 'relatorios'; state.view = 'metaAds'; render(); });
     if (action === 'detail-tab') el.addEventListener('click', () => { state.detailTab = el.dataset.tab; render(); });
     if (action === 'convert-lead') el.addEventListener('click', () => convertLead(el.dataset.id));
     if (action === 'move-lead') el.addEventListener('change', () => moveLead(el.dataset.id, el.value));
@@ -2834,6 +2928,7 @@ function bindGlobalActions() {
     if (action === 'meta-fetch') el.addEventListener('click', fetchMetaAdsReport);
     if (action === 'meta-save-report') el.addEventListener('click', saveMetaReport);
     if (action === 'meta-back') el.addEventListener('click', () => { state.metaAds.report = null; render(); });
+    if (action === 'meta-tab') el.addEventListener('click', () => { state.metaAds.tab = el.dataset.tab || 'consulta'; render(); });
     if (action === 'meta-view-mode') el.addEventListener('click', () => { state.metaAds.viewMode = el.dataset.mode; render(); });
     if (action === 'import-meta-clients') el.addEventListener('click', importLegacyMetaAdsClients);
     if (action === 'gbp-client') el.addEventListener('change', () => { state.gbp.clienteId = el.value; });
@@ -2844,6 +2939,10 @@ function bindGlobalActions() {
     if (action === 'gbp-search-radius') el.addEventListener('change', () => { state.gbp.searchRadiusMeters = el.value; });
     if (action === 'gbp-grid') el.addEventListener('change', () => { state.gbp.gridSize = Number(el.value || 5); });
     if (action === 'gbp-fetch') el.addEventListener('click', fetchGbpReport);
+    if (action === 'gbp-save-report') el.addEventListener('click', saveGbpReport);
+    if (action === 'gbp-tab') el.addEventListener('click', () => { state.gbp.tab = el.dataset.tab || 'nova'; render(); });
+    if (action === 'gbp-saved-open') el.addEventListener('click', () => { state.gbp.selectedSavedId = el.dataset.id; render(); });
+    if (action === 'gbp-saved-delete') el.addEventListener('click', () => deleteGbpSavedReport(el.dataset.id));
     if (action === 'diary-select') el.addEventListener('click', (event) => {
       if (event.target.closest('textarea, input, button')) return;
       state.diarioSelectedClienteId = el.dataset.client;
@@ -4455,8 +4554,51 @@ async function saveMetaReport() {
     await loadAll();
     state.lastSavedRelatorioId = saved.id;
     state.metaAds.report = null;
-    navigate('relatorios');
-    toast('Relatorio salvo e listado em Relatorios.');
+    state.metaAds.tab = 'relatorios';
+    navigate('metaAds');
+    toast('Relatorio salvo em Relatorios Meta Ads.');
+  } catch (error) {
+    showError(error);
+  }
+}
+
+async function saveGbpReport() {
+  const report = state.gbp.report;
+  if (!report) {
+    toast('Gere uma analise antes de salvar.', 'error');
+    return;
+  }
+  try {
+    const saved = await gmnAnaliseService.create({
+      cliente_id: state.gbp.clienteId || report.clienteId || null,
+      nome_perfil: report.details?.name || state.gbp.businessQuery || 'Perfil analisado',
+      endereco: report.details?.address || '',
+      palavra_chave: report.keyword || state.gbp.keyword,
+      score: Number(report.score || report.health?.score || report.metrics?.visibility || 0),
+      saude_perfil: Number(report.health?.score || report.score || 0),
+      grid_size: Number(report.gridSize || state.gbp.gridSize || 0),
+      raio_km: Number(report.radiusKm || state.gbp.radiusKm || 0),
+      gerado_em: report.generatedAt || new Date().toISOString(),
+      report,
+    });
+    await loadAll();
+    state.gbp.tab = 'salvas';
+    state.gbp.selectedSavedId = saved.id;
+    toast('Analise GMN salva.');
+    render();
+  } catch (error) {
+    showError(error);
+  }
+}
+
+async function deleteGbpSavedReport(id) {
+  if (!id || !confirm('Excluir esta analise GMN salva?')) return;
+  try {
+    await gmnAnaliseService.delete(id);
+    state.gmnAnalises = state.gmnAnalises.filter((item) => item.id !== id);
+    if (state.gbp.selectedSavedId === id) state.gbp.selectedSavedId = null;
+    toast('Analise GMN excluida.');
+    render();
   } catch (error) {
     showError(error);
   }

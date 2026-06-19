@@ -1106,7 +1106,8 @@ label { display: grid; gap: 7px; color: var(--muted); font-size: 12px; font-weig
 .lead-potential-alto { box-shadow: 0 10px 24px rgba(5, 150, 105, 0.10); }
 .lead-potential-baixo { opacity: 0.88; }
 
-.tabs { display: flex; gap: 8px; flex-wrap: wrap; margin: 0 0 16px; }
+.tabs,
+.section-tabs { display: flex; gap: 8px; flex-wrap: wrap; margin: 0 0 16px; }
 .tab-button { min-height: 36px; padding: 0 12px; border: 1px solid var(--line); border-radius: var(--radius); background: #ffffff; color: var(--muted); box-shadow: var(--shadow-soft); }
 .tab-button.active { color: #0f766e; background: #ecfdf5; border-color: rgba(15, 118, 110, 0.24); }
 .detail-top { display: grid; grid-template-columns: 1.3fr 0.7fr; gap: 16px; margin-bottom: 16px; }
