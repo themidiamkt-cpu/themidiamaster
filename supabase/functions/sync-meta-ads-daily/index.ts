@@ -383,18 +383,20 @@ function summarizeDailyRows(rows: any[], client: ClientRow, goalKey: GoalKey) {
 
 function extractMetaAction(row: any, actionTypes: readonly string[]) {
   const actions = row.actions || [];
-  return actionTypes.reduce((sum, actionType) => {
+  for (const actionType of actionTypes) {
     const found = actions.find((item: any) => item.action_type === actionType);
-    return sum + Number(found?.value || 0);
-  }, 0);
+    if (found) return Number(found.value || 0);
+  }
+  return 0;
 }
 
 function extractMetaActionValue(row: any, actionTypes: readonly string[]) {
   const values = row.action_values || [];
-  return actionTypes.reduce((sum, actionType) => {
+  for (const actionType of actionTypes) {
     const found = values.find((item: any) => item.action_type === actionType);
-    return sum + Number(found?.value || 0);
-  }, 0);
+    if (found) return Number(found.value || 0);
+  }
+  return 0;
 }
 
 function ratio(part: number, total: number, decimals = 2) {
