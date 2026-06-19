@@ -110,6 +110,7 @@ const state = {
 
 const crmStages = ['lead_novo', 'contato_feito', 'respondeu', 'reuniao_marcada', 'proposta_enviada', 'follow_up', 'fechado', 'perdido'];
 const onboardingFields = ['contrato_assinado', 'briefing_preenchido', 'acesso_business_manager', 'acesso_instagram', 'acesso_google_ads', 'pixel_configurado', 'dominio_verificado', 'whatsapp_conectado', 'crm_configurado', 'primeira_campanha_criada', 'primeira_reuniao_realizada'];
+const weekDayLabels = ['Domingo', 'Segunda', 'Terca', 'Quarta', 'Quinta', 'Sexta', 'Sabado'];
 const legacyMetaAdsClients = [
   { nome_empresa: 'Zin Bar', meta_ads_act: 'act_712213988136898', segmento: 'Restaurante', status: 'ativo', plano_contratado: 'personalizado', observacoes: 'Objetivo Meta Ads: mensagens.' },
   { nome_empresa: 'Garden Bar', meta_ads_act: 'act_4377679522276466', segmento: 'Restaurante', status: 'ativo', plano_contratado: 'personalizado', observacoes: 'Objetivo Meta Ads: mensagens.' },
@@ -2403,15 +2404,17 @@ function renderTaskRow(tarefa) {
   const clPill  = clTotal > 0
     ? `<span class="task-checklist-pill${clDone === clTotal ? ' is-complete' : ''}"><i data-lucide="${clDone === clTotal ? 'check-circle-2' : 'list-checks'}"></i>${clDone}/${clTotal}</span>`
     : '';
+  const recurringPill = taskRecurringPill(tarefa);
   return `
     <article class="task-row ${isDone ? 'is-done' : ''}" data-task-id="${tarefa.id}">
       <div class="task-title-cell">
         <button class="task-check ${isDone ? 'checked' : ''}" data-action="toggle-task-status" data-id="${tarefa.id}" data-status="${tarefa.status}" aria-label="Alternar status"><i data-lucide="${isDone ? 'check' : 'circle'}"></i></button>
         <div style="min-width:0">
           <button class="task-title-link" data-action="open-task-detail" data-id="${tarefa.id}">${escapeHtml(tarefa.titulo)}</button>
-          ${(tarefa.descricao || clPill) ? `<div class="task-row-sub">
+          ${(tarefa.descricao || clPill || recurringPill) ? `<div class="task-row-sub">
             ${tarefa.descricao ? `<span class="task-row-desc">${escapeHtml(tarefa.descricao)}</span>` : ''}
             ${clPill}
+            ${recurringPill}
           </div>` : ''}
         </div>
       </div>
@@ -2433,6 +2436,19 @@ function taskAssignee(name) {
   if (!name || name === '-') return '<span class="muted">-</span>';
   const initials = String(name).split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join('').toUpperCase();
   return `<span class="task-assignee"><b>${escapeHtml(initials)}</b>${escapeHtml(name)}</span>`;
+}
+
+function taskRecurringPill(tarefa) {
+  if (tarefa.recorrencia !== 'semanal' || !tarefa.recorrencia_ativa) return '';
+  const day = Number.isInteger(Number(tarefa.recorrencia_dia_semana)) ? Number(tarefa.recorrencia_dia_semana) : null;
+  const dayLabel = day === null ? 'semanal' : weekDayLabels[day];
+  return `<span class="task-recurring-pill"><i data-lucide="repeat-2"></i>${escapeHtml(dayLabel)}</span>`;
+}
+
+function taskRecurrenceText(tarefa) {
+  if (tarefa.recorrencia !== 'semanal' || !tarefa.recorrencia_ativa) return 'Sem recorrencia';
+  const day = Number.isInteger(Number(tarefa.recorrencia_dia_semana)) ? Number(tarefa.recorrencia_dia_semana) : null;
+  return `Toda ${day === null ? 'semana' : weekDayLabels[day].toLowerCase()}`;
 }
 
 function taskDuePill(value, status) {
@@ -3111,6 +3127,7 @@ async function handleSubmit(event, entity, id) {
   if (entity === 'relatorios' && payload.cliente_id) {
     payload.meta_ads_act_snapshot = state.clientes.find((cliente) => cliente.id === payload.cliente_id)?.meta_ads_act || null;
   }
+  if (entity === 'tarefas') normalizeTaskPayload(payload);
 
   try {
     await getService(entity)[id ? 'update' : 'create'](id || payload, payload);
@@ -3138,15 +3155,66 @@ async function handleDelete(entity, id) {
 async function toggleTaskStatus(id, currentStatus) {
   if (!id) return;
   const nextStatus = currentStatus === 'concluida' ? 'pendente' : 'concluida';
+  const tarefa = state.tarefas.find((item) => item.id === id);
+  const { patch, rescheduled } = buildTaskStatusPatch(tarefa, nextStatus);
   try {
-    await tarefaService.update(id, { status: nextStatus });
+    await tarefaService.update(id, patch);
     const index = state.tarefas.findIndex((tarefa) => tarefa.id === id);
-    if (index >= 0) state.tarefas[index] = { ...state.tarefas[index], status: nextStatus };
+    if (index >= 0) state.tarefas[index] = { ...state.tarefas[index], ...patch };
     render();
-    toast(nextStatus === 'concluida' ? 'Tarefa concluida.' : 'Tarefa reaberta.');
+    if (rescheduled) {
+      toast(`Tarefa semanal reagendada para ${date(patch.data_vencimento)}.`);
+    } else {
+      toast(nextStatus === 'concluida' ? 'Tarefa concluida.' : 'Tarefa reaberta.');
+    }
   } catch (error) {
     showError(error);
   }
+}
+
+function buildTaskStatusPatch(tarefa, nextStatus) {
+  const rescheduled = nextStatus === 'concluida' && tarefa?.recorrencia === 'semanal' && tarefa?.recorrencia_ativa;
+  if (rescheduled) {
+    return {
+      rescheduled,
+      patch: {
+        status: 'pendente',
+        data_vencimento: getNextWeeklyTaskDate(tarefa.recorrencia_dia_semana, tarefa.data_vencimento),
+        concluida_em: null,
+      },
+    };
+  }
+  return {
+    rescheduled,
+    patch: {
+      status: nextStatus,
+      concluida_em: nextStatus === 'concluida' ? new Date().toISOString() : null,
+    },
+  };
+}
+
+function normalizeTaskPayload(payload) {
+  const recurrence = payload.recorrencia || 'nenhuma';
+  payload.recorrencia = recurrence;
+  payload.recorrencia_ativa = recurrence === 'semanal';
+  if (recurrence === 'semanal') {
+    const fallbackDay = payload.data_vencimento ? new Date(`${payload.data_vencimento}T00:00:00`).getDay() : 1;
+    payload.recorrencia_dia_semana = payload.recorrencia_dia_semana === null ? fallbackDay : Number(payload.recorrencia_dia_semana);
+    if (!payload.data_vencimento) payload.data_vencimento = getNextWeeklyTaskDate(payload.recorrencia_dia_semana);
+  } else {
+    payload.recorrencia_dia_semana = null;
+  }
+}
+
+function getNextWeeklyTaskDate(dayOfWeek, fromDate) {
+  const base = fromDate ? new Date(`${fromDate}T00:00:00`) : new Date();
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  if (base < today) base.setTime(today.getTime());
+  const targetDay = Number.isInteger(Number(dayOfWeek)) ? Number(dayOfWeek) : base.getDay();
+  const daysUntilNext = (targetDay - base.getDay() + 7) % 7 || 7;
+  base.setDate(base.getDate() + daysUntilNext);
+  return isoDate(base);
 }
 
 // ── Task Detail (ClickUp-style) ─────────────────────────────────────────────
@@ -3298,6 +3366,7 @@ function buildTaskDetailHTML(tarefa) {
               <div><strong>Atualizado:</strong> ${date(tarefa.updated_at)}</div>
               ${tarefa.data_inicio ? `<div><strong>Início:</strong> ${date(tarefa.data_inicio)}</div>` : ''}
               ${tarefa.data_vencimento ? `<div><strong>Vencimento:</strong> ${date(tarefa.data_vencimento)}</div>` : ''}
+              <div><strong>Recorrência:</strong> ${escapeHtml(taskRecurrenceText(tarefa))}</div>
               ${clTotal > 0 ? `
               <div>
                 <strong>Progresso:</strong> ${clDone}/${clTotal} itens (${pct}%)
@@ -3436,13 +3505,15 @@ function openStatusMenu(btn) {
       menu.remove();
       const newStatus = item.dataset.value;
       const id = btn.dataset.id;
+      const tarefa = state.tarefas.find((item) => item.id === id);
+      const { patch, rescheduled } = buildTaskStatusPatch(tarefa, newStatus);
       try {
-        await tarefaService.update(id, { status: newStatus });
+        await tarefaService.update(id, patch);
         const idx = state.tarefas.findIndex((t) => t.id === id);
-        if (idx >= 0) state.tarefas[idx] = { ...state.tarefas[idx], status: newStatus };
+        if (idx >= 0) state.tarefas[idx] = { ...state.tarefas[idx], ...patch };
         refreshTaskDetail();
         rerenderTaskRowInPlace(id);
-        toast(`Status: ${item.textContent.trim()}`);
+        toast(rescheduled ? `Tarefa semanal reagendada para ${date(patch.data_vencimento)}.` : `Status: ${item.textContent.trim()}`);
       } catch (e) { showError(e); }
     });
   });
@@ -3896,6 +3967,8 @@ function getFormSchema(entity) {
         { name: 'status', label: 'Status', type: 'select', options: ['pendente', 'em_andamento', 'concluida', 'cancelada'], default: 'pendente' },
         { name: 'data_inicio', label: 'Data de inicio', type: 'date' },
         { name: 'data_vencimento', label: 'Data de vencimento', type: 'date' },
+        { name: 'recorrencia', label: 'Recorrencia', type: 'select', options: ['nenhuma', 'semanal'], customLabels: [{ value: 'nenhuma', label: 'Nao repetir' }, { value: 'semanal', label: 'Semanal' }], default: 'nenhuma' },
+        { name: 'recorrencia_dia_semana', label: 'Dia da semana (se recorrente)', type: 'select', options: ['1', '2', '3', '4', '5', '6', '0'], customLabels: [{ value: '1', label: 'Segunda' }, { value: '2', label: 'Terca' }, { value: '3', label: 'Quarta' }, { value: '4', label: 'Quinta' }, { value: '5', label: 'Sexta' }, { value: '6', label: 'Sabado' }, { value: '0', label: 'Domingo' }], default: '1' },
         { name: 'descricao', label: 'Descricao', type: 'textarea' },
       ],
     },
