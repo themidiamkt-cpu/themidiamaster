@@ -1215,6 +1215,73 @@ label { display: grid; gap: 7px; color: var(--muted); font-size: 12px; font-weig
   width: 34px;
   height: 34px;
 }
+/* --- Compose bar --- */
+.conversation-compose {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 10px 12px;
+  background: #f0f2f5;
+  border-top: 1px solid rgba(15, 23, 42, 0.07);
+}
+.conversation-input {
+  flex: 1;
+  resize: none;
+  overflow: hidden;
+  min-height: 40px;
+  max-height: 120px;
+  padding: 10px 14px;
+  border: none;
+  border-radius: 20px;
+  background: #ffffff;
+  font-size: 14px;
+  font-family: inherit;
+  line-height: 1.4;
+  color: #111827;
+  outline: none;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+  transition: box-shadow 0.15s;
+}
+.conversation-input:focus {
+  box-shadow: 0 0 0 2px rgba(15, 118, 110, 0.25);
+}
+.conversation-input::placeholder {
+  color: #94a3b8;
+}
+.conversation-send-btn {
+  flex-shrink: 0;
+  width: 42px;
+  height: 42px;
+  border: none;
+  border-radius: 50%;
+  background: #0f766e;
+  color: #ffffff;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition: background 0.15s, opacity 0.15s, transform 0.1s;
+}
+.conversation-send-btn:disabled {
+  background: #cbd5e1;
+  cursor: default;
+}
+.conversation-send-btn:not(:disabled):hover {
+  background: #0d9488;
+}
+.conversation-send-btn:not(:disabled):active {
+  transform: scale(0.93);
+}
+.conversation-send-btn.sending {
+  opacity: 0.6;
+}
+.conversation-send-btn.error {
+  background: #ef4444;
+}
+/* Bolha com erro de envio */
+.conversation-bubble.send-error {
+  opacity: 0.6;
+  outline: 2px solid #ef4444;
+}
 .lead-card p { margin: 0 0 10px; color: var(--muted); font-size: 12px; }
 .lead-card-meta {
   display: grid;

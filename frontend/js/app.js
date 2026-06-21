@@ -1382,19 +1382,100 @@ function openLeadConversation(id) {
           <span>${escapeHtml(formatLeadPhone(lead.whatsapp) || lead.origem_lead || 'WhatsApp')}</span>
         </div>
       </div>
-      <div class="conversation-thread">
+      <div class="conversation-thread" id="conversationThread">
         ${messages.length ? messages.map(renderConversationMessage).join('') : `
-          <div class="conversation-empty">
+          <div class="conversation-empty" id="conversationEmpty">
             <i data-lucide="message-circle"></i>
             <strong>Nenhuma mensagem encontrada</strong>
             <span>Os logs recentes nao tem conversa para este numero.</span>
           </div>
         `}
       </div>
+      <div class="conversation-compose">
+        <textarea
+          id="conversationInput"
+          class="conversation-input"
+          placeholder="Escreva uma mensagem..."
+          rows="1"
+          maxlength="4096"
+        ></textarea>
+        <button id="conversationSend" class="conversation-send-btn" aria-label="Enviar mensagem" disabled>
+          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+        </button>
+      </div>
     </div>
   `;
   modalBackdrop.hidden = false;
   renderLucide();
+
+  const thread = modalForm.querySelector('#conversationThread');
+  const input = modalForm.querySelector('#conversationInput');
+  const sendBtn = modalForm.querySelector('#conversationSend');
+
+  // Scroll para o final do historico
+  if (thread) thread.scrollTop = thread.scrollHeight;
+
+  // Habilita/desabilita botao conforme digitacao + auto-resize do textarea
+  input?.addEventListener('input', () => {
+    sendBtn.disabled = !input.value.trim();
+    input.style.height = 'auto';
+    input.style.height = Math.min(input.scrollHeight, 120) + 'px';
+  });
+
+  // Envio com Enter (Shift+Enter = quebra de linha)
+  input?.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      if (!sendBtn.disabled) sendConversationMessage(lead, input, sendBtn, thread);
+    }
+  });
+
+  sendBtn?.addEventListener('click', () => {
+    if (!sendBtn.disabled) sendConversationMessage(lead, input, sendBtn, thread);
+  });
+}
+
+async function sendConversationMessage(lead, input, sendBtn, thread) {
+  const text = input.value.trim();
+  if (!text) return;
+
+  const phone = normalizeDigits(lead.whatsapp);
+  sendBtn.disabled = true;
+  sendBtn.classList.add('sending');
+
+  // Otimista: renderiza a bolha imediatamente
+  const empty = thread.querySelector('#conversationEmpty');
+  if (empty) empty.remove();
+  const bubble = document.createElement('div');
+  bubble.innerHTML = renderConversationMessage({ fromMe: true, text, date: new Date().toISOString() });
+  thread.appendChild(bubble.firstElementChild);
+  thread.scrollTop = thread.scrollHeight;
+
+  input.value = '';
+  input.style.height = 'auto';
+
+  try {
+    const response = await fetch('https://automacao2.themidiamarketing.com.br/webhook/the-midia-wpp', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        phone,
+        message: text,
+        lead_id: lead.id,
+        nome_empresa: lead.nome_empresa || '',
+      }),
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    sendBtn.classList.remove('sending');
+  } catch (err) {
+    console.error('[chat] Falha ao enviar mensagem:', err);
+    sendBtn.classList.remove('sending');
+    sendBtn.classList.add('error');
+    setTimeout(() => sendBtn.classList.remove('error'), 2000);
+    // Marca a bolha com erro
+    const lastBubble = thread.lastElementChild?.querySelector('.conversation-bubble');
+    if (lastBubble) lastBubble.classList.add('send-error');
+  }
 }
 
 function getLeadConversationMessages(lead) {
