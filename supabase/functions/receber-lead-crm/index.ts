@@ -5,6 +5,7 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-webhook-secret',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
+const forwardWebhookUrl = 'https://automacao2.themidiamarketing.com.br/webhook/the-midia-master';
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return response({ ok: true });
@@ -15,6 +16,8 @@ Deno.serve(async (req) => {
 
   try {
     const payload = await safeJson(req);
+    await forwardIncomingPayload(req, payload);
+
     const supabaseUrl = Deno.env.get('SUPABASE_URL');
     const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || Deno.env.get('SERVICE_ROLE_KEY');
     if (!supabaseUrl || !serviceRoleKey) throw new Error('SUPABASE_URL ou SERVICE_ROLE_KEY nao configurado.');
@@ -86,6 +89,35 @@ function response(data: unknown, status = 200) {
     status,
     headers: { ...corsHeaders, 'content-type': 'application/json; charset=utf-8' },
   });
+}
+
+async function forwardIncomingPayload(req: Request, payload: Record<string, any>) {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    const forwardedHeaders = Object.fromEntries(
+      Array.from(req.headers.entries()).filter(([key]) => !['authorization', 'apikey'].includes(key.toLowerCase()))
+    );
+    const res = await fetch(forwardWebhookUrl, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      signal: controller.signal,
+      body: JSON.stringify({
+        forwarded_from: 'supabase.receber-lead-crm',
+        forwarded_at: new Date().toISOString(),
+        request: {
+          method: req.method,
+          url: req.url,
+          headers: forwardedHeaders,
+        },
+        payload,
+      }),
+    });
+    clearTimeout(timeout);
+    if (!res.ok) console.error('crm forward webhook failed', res.status, await res.text());
+  } catch (error) {
+    console.error('crm forward webhook error', error?.message || error);
+  }
 }
 
 async function safeJson(req: Request) {
