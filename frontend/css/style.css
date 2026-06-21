@@ -1113,6 +1113,108 @@ label { display: grid; gap: 7px; color: var(--muted); font-size: 12px; font-weig
   border-color: #fecaca;
   background: #fff1f2;
 }
+.conversation-panel {
+  display: grid;
+  gap: 0;
+  overflow: hidden;
+  min-height: 560px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #f0f2f5;
+}
+.conversation-contact {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+  background: #ffffff;
+}
+.conversation-avatar {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: #ffffff;
+  font-weight: 900;
+  background: linear-gradient(135deg, #0f766e, #22c55e);
+}
+.conversation-contact strong {
+  display: block;
+  color: #0f172a;
+  font-size: 15px;
+}
+.conversation-contact span {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+.conversation-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  max-height: min(62vh, 620px);
+  overflow-y: auto;
+  padding: 18px;
+  background:
+    linear-gradient(rgba(240, 242, 245, 0.88), rgba(240, 242, 245, 0.88)),
+    radial-gradient(circle at 12px 12px, rgba(15, 118, 110, 0.08) 1px, transparent 1px);
+  background-size: auto, 24px 24px;
+}
+.conversation-message {
+  display: flex;
+}
+.conversation-message.from-me {
+  justify-content: flex-end;
+}
+.conversation-message.from-contact {
+  justify-content: flex-start;
+}
+.conversation-bubble {
+  max-width: min(72%, 520px);
+  padding: 9px 11px 7px;
+  border-radius: 12px;
+  box-shadow: 0 1px 1px rgba(15, 23, 42, 0.08);
+}
+.conversation-message.from-me .conversation-bubble {
+  border-top-right-radius: 4px;
+  background: #d9fdd3;
+}
+.conversation-message.from-contact .conversation-bubble {
+  border-top-left-radius: 4px;
+  background: #ffffff;
+}
+.conversation-bubble p {
+  margin: 0;
+  color: #111827;
+  font-size: 14px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+.conversation-bubble span {
+  display: block;
+  margin-top: 4px;
+  color: #64748b;
+  font-size: 10px;
+  font-weight: 700;
+  text-align: right;
+}
+.conversation-empty {
+  margin: auto;
+  display: grid;
+  justify-items: center;
+  gap: 7px;
+  color: var(--muted);
+  text-align: center;
+}
+.conversation-empty svg {
+  width: 34px;
+  height: 34px;
+}
 .lead-card p { margin: 0 0 10px; color: var(--muted); font-size: 12px; }
 .lead-card-meta {
   display: grid;

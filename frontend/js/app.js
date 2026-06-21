@@ -15,6 +15,7 @@ import { vendaClienteService } from './services/vendaClienteService.js';
 import { metaAdsDailyInsightService } from './services/metaAdsDailyInsightService.js';
 import { metaAdsAccountHealthService } from './services/metaAdsAccountHealthService.js';
 import { gmnAnaliseService } from './services/gmnAnaliseService.js';
+import { crmWebhookLogService } from './services/crmWebhookLogService.js';
 import { confirmDelete, date, emptyState, escapeHtml, label, loadingState, money, number, pageHeader, renderLucide, statCard, statusBadge, toast } from './components/ui.js';
 
 const app = document.getElementById('app');
@@ -37,6 +38,8 @@ const state = {
   taskDetailId: null,
   clientes: [],
   leads: [],
+  crmWebhookLogs: [],
+  crmWebhookLogsMissingTable: false,
   campanhas: [],
   relatorios: [],
   vendas: [],
@@ -215,9 +218,10 @@ async function loadAll() {
 
     if (isMainAdmin()) {
       const dashboardRange = getFourWeeksRange();
-      const [clientes, leads, campanhas, relatorios, vendas, metaAdsDailyInsights, metaAdsAccountHealth, gmnAnalises, tarefas, diarios, equipe, alertas, metas] = await withTimeout(Promise.all([
+      const [clientes, leads, crmWebhookLogs, campanhas, relatorios, vendas, metaAdsDailyInsights, metaAdsAccountHealth, gmnAnalises, tarefas, diarios, equipe, alertas, metas] = await withTimeout(Promise.all([
         clienteService.list({ order: 'nome_empresa', ascending: true }),
         leadCrmService.list(),
+        safeCrmWebhookLogsList(),
         campanhaService.list({ columns: '*, clientes(nome_empresa, meta_ads_act)' }),
         relatorioService.list({ columns: '*, clientes(nome_empresa, meta_ads_act)' }),
         safeVendasList(),
@@ -230,7 +234,7 @@ async function loadAll() {
         safeAlertasList(),
         safeList(() => metaClienteService.listAll()),
       ]), 12000, 'O Supabase demorou para carregar os dados. Mostrando o painel em modo vazio ate atualizar.');
-      Object.assign(state, { clientes, leads, campanhas, relatorios, vendas, metaAdsDailyInsights, metaAdsAccountHealth, gmnAnalises, tarefas, diarios, equipe, alertas, metas });
+      Object.assign(state, { clientes, leads, crmWebhookLogs, campanhas, relatorios, vendas, metaAdsDailyInsights, metaAdsAccountHealth, gmnAnalises, tarefas, diarios, equipe, alertas, metas });
       updateAlertasBadge();
       return;
     }
@@ -242,7 +246,7 @@ async function loadAll() {
       tarefaService.list({ columns: '*, clientes(nome_empresa)' }),
       safeDiaryList(),
     ]), 12000, 'O Supabase demorou para carregar os dados. Mostrando o painel em modo vazio ate atualizar.');
-    Object.assign(state, { clientes, leads: [], campanhas: [], relatorios, vendas, tarefas, diarios, equipe: [] });
+    Object.assign(state, { clientes, leads: [], crmWebhookLogs: [], campanhas: [], relatorios, vendas, tarefas, diarios, equipe: [] });
   } catch (error) {
     state.loadError = error.message || 'Nao foi possivel carregar os dados do Supabase.';
     showError(error);
@@ -322,6 +326,20 @@ async function safeGmnAnalisesList() {
   } catch (error) {
     if (['42P01', 'PGRST205'].includes(error?.code) || String(error?.message || '').includes('gmn_analises')) {
       state.gmnAnalisesMissingTable = true;
+      return [];
+    }
+    throw error;
+  }
+}
+
+async function safeCrmWebhookLogsList() {
+  try {
+    const rows = await crmWebhookLogService.listRecent(600);
+    state.crmWebhookLogsMissingTable = false;
+    return rows;
+  } catch (error) {
+    if (['42P01', 'PGRST205'].includes(error?.code) || String(error?.message || '').includes('crm_webhook_logs')) {
+      state.crmWebhookLogsMissingTable = true;
       return [];
     }
     throw error;
@@ -1336,6 +1354,7 @@ function renderLeadCard(lead) {
     <article class="lead-card lead-potential-${escapeHtml(lead.potencial || 'medio')}" draggable="true" data-lead-id="${lead.id}" data-lead-stage="${escapeHtml(lead.etapa || 'lead_novo')}">
       <strong class="lead-card-name">${escapeHtml(lead.nome_empresa)}</strong>
       <div class="lead-card-actions">
+        <button class="icon-button" data-action="open-lead-conversation" data-id="${lead.id}" aria-label="Abrir conversa"><i data-lucide="message-circle"></i></button>
         <button class="icon-button" data-action="edit" data-entity="crm" data-id="${lead.id}" aria-label="Editar lead"><i data-lucide="pencil"></i></button>
         <button class="icon-button danger" data-action="delete" data-entity="crm" data-id="${lead.id}" aria-label="Excluir lead"><i data-lucide="trash-2"></i></button>
       </div>
@@ -1345,6 +1364,121 @@ function renderLeadCard(lead) {
 
 function crmPipelineMetric(labelText, value) {
   return `<div><span>${escapeHtml(labelText)}</span><strong>${escapeHtml(value)}</strong></div>`;
+}
+
+function openLeadConversation(id) {
+  const lead = state.leads.find((item) => item.id === id);
+  if (!lead) return;
+  const messages = getLeadConversationMessages(lead);
+  modalEyebrow.textContent = 'Conversa';
+  modalTitle.textContent = lead.nome_empresa || 'Lead';
+  modalForm.onsubmit = null;
+  modalForm.innerHTML = `
+    <div class="conversation-panel">
+      <div class="conversation-contact">
+        <div class="conversation-avatar">${escapeHtml(getInitials(lead.nome_empresa || lead.whatsapp || 'TM'))}</div>
+        <div>
+          <strong>${escapeHtml(lead.nome_empresa || 'Lead')}</strong>
+          <span>${escapeHtml(formatLeadPhone(lead.whatsapp) || lead.origem_lead || 'WhatsApp')}</span>
+        </div>
+      </div>
+      <div class="conversation-thread">
+        ${messages.length ? messages.map(renderConversationMessage).join('') : `
+          <div class="conversation-empty">
+            <i data-lucide="message-circle"></i>
+            <strong>Nenhuma mensagem encontrada</strong>
+            <span>Os logs recentes nao tem conversa para este numero.</span>
+          </div>
+        `}
+      </div>
+    </div>
+  `;
+  modalBackdrop.hidden = false;
+  renderLucide();
+}
+
+function getLeadConversationMessages(lead) {
+  const leadPhone = normalizeDigits(lead.whatsapp);
+  return state.crmWebhookLogs
+    .filter((log) => {
+      if (log.lead_id && log.lead_id === lead.id) return true;
+      const remoteDigits = normalizeDigits(log.remote_jid);
+      if (leadPhone && remoteDigits && (remoteDigits.endsWith(leadPhone) || leadPhone.endsWith(remoteDigits))) return true;
+      return false;
+    })
+    .map((log) => ({
+      id: log.id,
+      fromMe: Boolean(log.from_me),
+      text: extractConversationText(log.payload) || log.error || label(log.action || log.event || 'evento'),
+      date: log.received_at,
+      event: log.event || log.action || 'webhook',
+    }))
+    .filter((message) => String(message.text || '').trim())
+    .sort((a, b) => new Date(a.date) - new Date(b.date));
+}
+
+function renderConversationMessage(message) {
+  return `
+    <div class="conversation-message ${message.fromMe ? 'from-me' : 'from-contact'}">
+      <div class="conversation-bubble">
+        <p>${escapeHtml(message.text)}</p>
+        <span>${escapeHtml(formatMessageTime(message.date))}</span>
+      </div>
+    </div>
+  `;
+}
+
+function extractConversationText(payload = {}) {
+  const data = payload.data || payload.body || payload;
+  const message = data.message || data.messages?.[0]?.message || payload.message || {};
+  return firstFilled(
+    payload.text,
+    payload.messageText,
+    payload.conversation,
+    data.text,
+    data.messageText,
+    data.conversation,
+    message.conversation,
+    message.extendedTextMessage?.text,
+    message.imageMessage?.caption,
+    message.videoMessage?.caption,
+    message.documentMessage?.caption,
+    data.messages?.[0]?.text
+  );
+}
+
+function firstFilled(...values) {
+  return values.find((value) => String(value || '').trim()) || '';
+}
+
+function normalizeDigits(value) {
+  return String(value || '').replace(/\D/g, '');
+}
+
+function formatLeadPhone(value) {
+  const digits = normalizeDigits(value);
+  if (!digits) return '';
+  return digits.startsWith('55') ? `+${digits}` : digits;
+}
+
+function getInitials(value) {
+  return String(value || '')
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0])
+    .join('')
+    .toUpperCase() || 'TM';
+}
+
+function formatMessageTime(value) {
+  if (!value) return '';
+  return new Intl.DateTimeFormat('pt-BR', {
+    day: '2-digit',
+    month: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(value));
 }
 
 function renderCampanhas() {
@@ -2913,6 +3047,7 @@ function bindGlobalActions() {
     if (action === 'back-relatorios') el.addEventListener('click', () => { state.detailRelatorioId = null; state.metaAds.tab = 'relatorios'; state.view = 'metaAds'; render(); });
     if (action === 'detail-tab') el.addEventListener('click', () => { state.detailTab = el.dataset.tab; render(); });
     if (action === 'convert-lead') el.addEventListener('click', () => convertLead(el.dataset.id));
+    if (action === 'open-lead-conversation') el.addEventListener('click', () => openLeadConversation(el.dataset.id));
     if (action === 'move-lead') el.addEventListener('change', () => moveLead(el.dataset.id, el.value));
     if (action === 'toggle-onboarding') el.addEventListener('change', () => updateOnboarding(el.dataset.id, { [el.dataset.field]: el.checked }));
     if (action === 'onboarding-notes') el.addEventListener('blur', () => updateOnboarding(el.dataset.id, { observacoes: el.value }));
