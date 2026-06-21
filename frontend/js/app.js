@@ -28,13 +28,14 @@ const fixedMetaAccessToken = 'EAAKJkRH2esoBRc0EFaZAkKc3TrzQZC6YZCmWP0tj4b7EdZBAa
 const fixedGoogleMapsApiKey = 'AIzaSyAyH7teIp1Xjprln7TaA1i_dIY8TB0_HgE';
 const whatsappWebhookUrl = 'https://automacao2.themidiamarketing.com.br/webhook/conectar-cliente';
 const mainAdminEmail = 'themidiamkt@gmail.com';
+const viewStorageKey = 'theMidiaMaster.activeView';
 const adminViews = ['dashboard', 'dashboardClientes', 'clientes', 'relatorios', 'crm', 'metaAds', 'gbp', 'diario', 'tarefas', 'equipe', 'metas', 'alertas', 'config'];
 const teamViews = ['relatorios', 'metaAds', 'gbp', 'diario', 'tarefas'];
 let googlePlacesLoader = null;
 let googlePlacesMap = null;
 
 const state = {
-  view: 'dashboard',
+  view: getStoredView() || 'dashboard',
   taskDetailId: null,
   clientes: [],
   leads: [],
@@ -392,6 +393,22 @@ function canAccessView(view) {
   return getAllowedViews().includes(view);
 }
 
+function getStoredView() {
+  try {
+    return localStorage.getItem(viewStorageKey) || '';
+  } catch {
+    return '';
+  }
+}
+
+function persistView() {
+  try {
+    localStorage.setItem(viewStorageKey, state.view);
+  } catch {
+    // localStorage can be unavailable in private/restricted contexts.
+  }
+}
+
 function applyNavPermissions() {
   const allowed = getAllowedViews();
   document.querySelectorAll('.nav-item[data-view]').forEach((item) => {
@@ -408,6 +425,7 @@ function navigate(view) {
   } else {
     state.view = view;
   }
+  persistView();
   state.detailClienteId = null;
   state.detailRelatorioId = null;
   applyNavPermissions();
@@ -434,10 +452,12 @@ function render() {
 
   document.body.classList.remove('auth-only');
   if (!canAccessView(state.view)) state.view = getDefaultView();
+  persistView();
   applyNavPermissions();
   if (!isMainAdmin() && state.detailClienteId) {
     state.detailClienteId = null;
     state.view = getDefaultView();
+    persistView();
   }
   if (state.detailClienteId) {
     renderClienteDetail(state.detailClienteId);
