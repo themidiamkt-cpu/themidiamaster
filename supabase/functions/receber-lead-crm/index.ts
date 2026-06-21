@@ -37,6 +37,10 @@ Deno.serve(async (req) => {
 
     const existingLead = await findOpenLead(supabase, normalized);
     if (existingLead) {
+      const responsePatch = normalized.from_me ? {} : {
+        ultima_interacao: new Date().toISOString(),
+        aguardando_resposta_manual: true,
+      };
       const { data, error } = await supabase
         .from('leads_crm')
         .update({
@@ -46,6 +50,7 @@ Deno.serve(async (req) => {
           origem_lead: normalized.origem_lead || existingLead.origem_lead,
           proxima_acao: 'Responder WhatsApp',
           observacoes: mergeNotes(existingLead.observacoes, normalized.observacoes),
+          ...responsePatch,
         })
         .eq('id', existingLead.id)
         .select('id,nome_empresa,whatsapp,etapa')
@@ -71,6 +76,8 @@ Deno.serve(async (req) => {
         potencial: normalized.potencial,
         proxima_acao: 'Responder WhatsApp',
         observacoes: normalized.observacoes,
+        ultima_interacao: normalized.from_me ? null : new Date().toISOString(),
+        aguardando_resposta_manual: !normalized.from_me,
       })
       .select('id,nome_empresa,whatsapp,etapa')
       .single();
@@ -230,6 +237,7 @@ function normalizeLeadPayload(payload: Record<string, any>) {
     origem_lead: String(origin || 'WhatsApp').slice(0, 80),
     potencial: normalizePotential(firstFilled(payload.potencial, data.potencial)),
     observacoes: notes || JSON.stringify(payload).slice(0, 1800),
+    from_me: fromMe,
   };
 }
 
