@@ -37,32 +37,12 @@ Deno.serve(async (req) => {
 
     const existingLead = await findOpenLead(supabase, normalized);
     if (existingLead) {
-      const responsePatch = normalized.from_me ? {} : {
-        ultima_interacao: new Date().toISOString(),
-        aguardando_resposta_manual: true,
-      };
-      const { data, error } = await supabase
-        .from('leads_crm')
-        .update({
-          responsavel: normalized.responsavel || existingLead.responsavel,
-          whatsapp: normalized.whatsapp || existingLead.whatsapp,
-          instagram: normalized.instagram || existingLead.instagram,
-          origem_lead: normalized.origem_lead || existingLead.origem_lead,
-          proxima_acao: 'Responder WhatsApp',
-          observacoes: mergeNotes(existingLead.observacoes, normalized.observacoes),
-          ...responsePatch,
-        })
-        .eq('id', existingLead.id)
-        .select('id,nome_empresa,whatsapp,etapa')
-        .single();
-      if (error) throw error;
+      const data = await updateExistingLead(supabase, existingLead, normalized);
       await updateWebhookLog(supabase, logId, { action: 'updated', lead_id: data.id });
       return response({ ok: true, action: 'updated', lead: data });
     }
 
-    const { data, error } = await supabase
-      .from('leads_crm')
-      .insert({
+    const insertPayload = {
         nome_empresa: normalized.nome_empresa,
         responsavel: normalized.responsavel,
         whatsapp: normalized.whatsapp,
@@ -78,10 +58,24 @@ Deno.serve(async (req) => {
         observacoes: normalized.observacoes,
         ultima_interacao: normalized.from_me ? null : new Date().toISOString(),
         aguardando_resposta_manual: !normalized.from_me,
-      })
+      };
+
+    const { data, error } = await supabase
+      .from('leads_crm')
+      .insert(insertPayload)
       .select('id,nome_empresa,whatsapp,etapa')
       .single();
-    if (error) throw error;
+    if (error) {
+      if (isDuplicateKeyError(error)) {
+        const leadAfterRace = await findOpenLead(supabase, normalized);
+        if (leadAfterRace) {
+          const updated = await updateExistingLead(supabase, leadAfterRace, normalized);
+          await updateWebhookLog(supabase, logId, { action: 'updated', lead_id: updated.id });
+          return response({ ok: true, action: 'updated', lead: updated });
+        }
+      }
+      throw error;
+    }
 
     await updateWebhookLog(supabase, logId, { action: 'created', lead_id: data.id });
     return response({ ok: true, action: 'created', lead: data });
@@ -298,6 +292,35 @@ function normalizePhone(value: unknown) {
   return digits.length > 13 ? digits.slice(0, 13) : digits;
 }
 
+function phoneVariants(value: unknown) {
+  const digits = normalizePhone(value);
+  if (!digits) return [];
+  const variants = new Set<string>([digits]);
+  const national = digits.startsWith('55') ? digits.slice(2) : digits;
+
+  if (digits.startsWith('55')) variants.add(national);
+  else variants.add(`55${digits}`);
+
+  if (national.length === 11 && national[2] === '9') {
+    const withoutNinthDigit = `${national.slice(0, 2)}${national.slice(3)}`;
+    variants.add(withoutNinthDigit);
+    variants.add(`55${withoutNinthDigit}`);
+  }
+
+  if (national.length === 10) {
+    const withNinthDigit = `${national.slice(0, 2)}9${national.slice(2)}`;
+    variants.add(withNinthDigit);
+    variants.add(`55${withNinthDigit}`);
+  }
+
+  return Array.from(variants).filter(Boolean);
+}
+
+function phonesMatch(left: unknown, right: unknown) {
+  const leftVariants = new Set(phoneVariants(left));
+  return phoneVariants(right).some((variant) => leftVariants.has(variant));
+}
+
 function normalizePotential(value: unknown) {
   const clean = String(value || '').toLowerCase().trim();
   return ['baixo', 'medio', 'alto'].includes(clean) ? clean : null;
@@ -305,20 +328,70 @@ function normalizePotential(value: unknown) {
 
 async function findOpenLead(supabase: any, lead: any) {
   if (!lead.whatsapp && !lead.email && !lead.instagram) return null;
-  let query = supabase
+  if (lead.whatsapp) {
+    const variants = phoneVariants(lead.whatsapp);
+    const { data, error } = await supabase
+      .from('leads_crm')
+      .select('id,nome_empresa,responsavel,whatsapp,instagram,origem_lead,etapa,observacoes')
+      .not('etapa', 'in', '("fechado","perdido")')
+      .not('whatsapp', 'is', null)
+      .order('created_at', { ascending: false })
+      .limit(500);
+
+    if (error) throw error;
+    return data?.find((item: any) => variants.includes(item.whatsapp) || phonesMatch(item.whatsapp, lead.whatsapp)) || null;
+  }
+
+  const column = lead.email ? 'email' : 'instagram';
+  const value = lead.email || lead.instagram;
+  const { data, error } = await supabase
     .from('leads_crm')
     .select('id,nome_empresa,responsavel,whatsapp,instagram,origem_lead,etapa,observacoes')
     .not('etapa', 'in', '("fechado","perdido")')
+    .eq(column, value)
     .order('created_at', { ascending: false })
     .limit(1);
 
-  if (lead.whatsapp) query = query.eq('whatsapp', lead.whatsapp);
-  else if (lead.email) query = query.eq('email', lead.email);
-  else query = query.eq('instagram', lead.instagram);
-
-  const { data, error } = await query;
   if (error) throw error;
   return data?.[0] || null;
+}
+
+async function updateExistingLead(supabase: any, existingLead: any, normalized: any) {
+  const responsePatch = normalized.from_me ? {} : {
+    ultima_interacao: new Date().toISOString(),
+    aguardando_resposta_manual: true,
+  };
+  const namePatch = shouldReplaceLeadName(existingLead.nome_empresa, normalized.nome_empresa)
+    ? { nome_empresa: normalized.nome_empresa }
+    : {};
+  const { data, error } = await supabase
+    .from('leads_crm')
+    .update({
+      ...namePatch,
+      responsavel: normalized.responsavel || existingLead.responsavel,
+      whatsapp: normalized.whatsapp || existingLead.whatsapp,
+      instagram: normalized.instagram || existingLead.instagram,
+      origem_lead: normalized.origem_lead || existingLead.origem_lead,
+      proxima_acao: 'Responder WhatsApp',
+      observacoes: mergeNotes(existingLead.observacoes, normalized.observacoes),
+      ...responsePatch,
+    })
+    .eq('id', existingLead.id)
+    .select('id,nome_empresa,whatsapp,etapa')
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+function shouldReplaceLeadName(current: unknown, incoming: unknown) {
+  const currentName = String(current || '').trim().toLowerCase();
+  const incomingName = String(incoming || '').trim();
+  if (!incomingName || incomingName.toLowerCase().startsWith('lead ')) return false;
+  return !currentName || currentName.startsWith('lead ');
+}
+
+function isDuplicateKeyError(error: any) {
+  return error?.code === '23505' || String(error?.message || '').toLowerCase().includes('duplicate key');
 }
 
 function mergeNotes(current: string | null, incoming: string | null) {

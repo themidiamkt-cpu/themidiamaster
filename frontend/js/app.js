@@ -1758,15 +1758,23 @@ function getLeadConversationMessages(lead) {
       if (leadPhone && remoteDigits && (remoteDigits.endsWith(leadPhone) || leadPhone.endsWith(remoteDigits))) return true;
       return false;
     })
-    .map((log) => ({
-      id: log.id,
-      fromMe: Boolean(log.from_me),
-      text: extractConversationText(log.payload) || log.error || label(log.action || log.event || 'evento'),
-      date: log.received_at,
-      event: log.event || log.action || 'webhook',
-    }))
-    .filter((message) => String(message.text || '').trim())
-    .sort((a, b) => new Date(a.date) - new Date(b.date));
+    .map((log) => {
+      const text = extractConversationText(log.payload);
+      if (!String(text || '').trim()) return null;
+      return {
+        id: log.id,
+        fromMe: Boolean(log.from_me),
+        text,
+        date: extractConversationDate(log),
+        event: log.event || log.action || 'webhook',
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => {
+      const dateDiff = new Date(a.date) - new Date(b.date);
+      if (dateDiff) return dateDiff;
+      return String(a.id || '').localeCompare(String(b.id || ''));
+    });
 }
 
 function renderConversationMessage(message) {
@@ -1797,6 +1805,36 @@ function extractConversationText(payload = {}) {
     message.documentMessage?.caption,
     data.messages?.[0]?.text
   );
+}
+
+function extractConversationDate(log = {}) {
+  const payload = log.payload || {};
+  const data = payload.data || payload.body || payload;
+  const message = data.message || data.messages?.[0]?.message || payload.message || {};
+  return normalizeConversationDate(firstFilled(
+    payload.messageTimestamp,
+    payload.timestamp,
+    payload.date_time,
+    data.messageTimestamp,
+    data.timestamp,
+    data.date_time,
+    data.messages?.[0]?.messageTimestamp,
+    data.messages?.[0]?.timestamp,
+    message.messageTimestamp,
+    log.received_at
+  ), log.received_at);
+}
+
+function normalizeConversationDate(value, fallback) {
+  if (!String(value || '').trim()) return fallback || new Date().toISOString();
+  if (typeof value === 'number' || /^\d+$/.test(String(value))) {
+    const numeric = Number(value);
+    const millis = numeric > 9999999999 ? numeric : numeric * 1000;
+    const date = new Date(millis);
+    return Number.isNaN(date.getTime()) ? fallback : date.toISOString();
+  }
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? fallback : date.toISOString();
 }
 
 function firstFilled(...values) {
