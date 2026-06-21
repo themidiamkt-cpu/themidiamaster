@@ -1441,8 +1441,9 @@ function renderFollowupLead(lead) {
 }
 
 function renderLeadCard(lead) {
+  const potentialClass = lead.potencial ? ` lead-potential-${escapeHtml(lead.potencial)}` : '';
   return `
-    <article class="lead-card lead-potential-${escapeHtml(lead.potencial || 'medio')}" draggable="true" data-lead-id="${lead.id}" data-lead-stage="${escapeHtml(lead.etapa || 'lead_novo')}">
+    <article class="lead-card${potentialClass}" draggable="true" data-lead-id="${lead.id}" data-lead-stage="${escapeHtml(lead.etapa || 'lead_novo')}">
       <strong class="lead-card-name">${escapeHtml(lead.nome_empresa)}</strong>
       <div class="lead-card-actions">
         <button class="icon-button" data-action="open-lead-conversation" data-id="${lead.id}" aria-label="Abrir conversa"><i data-lucide="message-circle"></i></button>
