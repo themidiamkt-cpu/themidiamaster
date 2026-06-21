@@ -29,7 +29,7 @@ const fixedGoogleMapsApiKey = 'AIzaSyAyH7teIp1Xjprln7TaA1i_dIY8TB0_HgE';
 const whatsappWebhookUrl = 'https://automacao2.themidiamarketing.com.br/webhook/conectar-cliente';
 const mainAdminEmail = 'themidiamkt@gmail.com';
 const viewStorageKey = 'theMidiaMaster.activeView';
-const adminViews = ['dashboard', 'dashboardClientes', 'clientes', 'relatorios', 'crm', 'metaAds', 'gbp', 'diario', 'tarefas', 'equipe', 'metas', 'alertas', 'config'];
+const adminViews = ['dashboard', 'dashboardClientes', 'clientes', 'relatorios', 'crm', 'crmFollowups', 'metaAds', 'gbp', 'diario', 'tarefas', 'equipe', 'metas', 'alertas', 'config'];
 const teamViews = ['relatorios', 'metaAds', 'gbp', 'diario', 'tarefas'];
 let googlePlacesLoader = null;
 let googlePlacesMap = null;
@@ -112,7 +112,15 @@ const state = {
   whatsapp: getStoredWhatsAppConfig(),
 };
 
-const crmStages = ['lead_novo', 'contato_feito', 'respondeu', 'reuniao_marcada', 'proposta_enviada', 'follow_up', 'fechado', 'perdido'];
+const crmStages = ['lead_novo', 'contato_feito', 'respondeu', 'reuniao_marcada', 'proposta_enviada', 'fechado', 'perdido'];
+const crmActiveStages = crmStages.filter((stage) => !['fechado', 'perdido'].includes(stage));
+const defaultFollowupCadence = {
+  lead_novo: [1, 3, 7],
+  contato_feito: [2, 4],
+  respondeu: [1, 3],
+  reuniao_marcada: [1, 2],
+  proposta_enviada: [2, 3, 5],
+};
 const onboardingFields = ['contrato_assinado', 'briefing_preenchido', 'acesso_business_manager', 'acesso_instagram', 'acesso_google_ads', 'pixel_configurado', 'dominio_verificado', 'whatsapp_conectado', 'crm_configurado', 'primeira_campanha_criada', 'primeira_reuniao_realizada'];
 const weekDayLabels = ['Domingo', 'Segunda', 'Terca', 'Quarta', 'Quinta', 'Sexta', 'Sabado'];
 const legacyMetaAdsClients = [
@@ -473,6 +481,7 @@ function render() {
     dashboardClientes: renderDashboardClientes,
     clientes: renderClientes,
     crm: renderCrm,
+    crmFollowups: renderCrmFollowups,
     campanhas: renderCampanhas,
     relatorios: renderRelatorios,
     metaAds: renderMetaAds,
@@ -759,9 +768,9 @@ function renderDashboard() {
   const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
   const leadsMonth = state.relatorios.filter((r) => new Date(r.periodo_fim) >= monthStart).reduce((sum, r) => sum + Number(r.leads || 0), 0);
   const crmTotal = state.leads.length;
-  const crmContacted = state.leads.filter((lead) => ['contato_feito', 'respondeu', 'reuniao_marcada', 'proposta_enviada', 'follow_up', 'fechado', 'perdido'].includes(lead.etapa)).length;
-  const crmMeetings = state.leads.filter((lead) => ['reuniao_marcada', 'proposta_enviada', 'follow_up', 'fechado'].includes(lead.etapa)).length;
-  const crmProposals = state.leads.filter((lead) => ['proposta_enviada', 'follow_up', 'fechado'].includes(lead.etapa)).length;
+  const crmContacted = state.leads.filter((lead) => ['contato_feito', 'respondeu', 'reuniao_marcada', 'proposta_enviada', 'fechado', 'perdido'].includes(lead.etapa)).length;
+  const crmMeetings = state.leads.filter((lead) => ['reuniao_marcada', 'proposta_enviada', 'fechado'].includes(lead.etapa)).length;
+  const crmProposals = state.leads.filter((lead) => ['proposta_enviada', 'fechado'].includes(lead.etapa)).length;
   const crmClosed = state.leads.filter((lead) => lead.etapa === 'fechado').length;
   const crmLost = state.leads.filter((lead) => lead.etapa === 'perdido').length;
   const contactRate = percent(crmContacted, crmTotal);
@@ -1358,14 +1367,76 @@ function renderCrm() {
   }).join('');
 
   return `
-    ${pageHeader('CRM Comercial', 'Funil de prospeccao da propria agencia.', `<button class="button" data-action="new" data-entity="crm"><i data-lucide="plus"></i>Novo lead</button>`)}
+    ${pageHeader('CRM Comercial', 'Funil de prospeccao da propria agencia.', `<button class="secondary-button" data-action="go-view" data-view="crmFollowups"><i data-lucide="message-square-warning"></i>Follow-ups de hoje</button><button class="button" data-action="new" data-entity="crm"><i data-lucide="plus"></i>Novo lead</button>`)}
     <div class="crm-pipeline-summary">
       ${crmPipelineMetric('Leads', state.leads.length)}
-      ${crmPipelineMetric('Reunioes', state.leads.filter((lead) => ['reuniao_marcada', 'proposta_enviada', 'follow_up', 'fechado'].includes(lead.etapa)).length)}
-      ${crmPipelineMetric('Propostas', state.leads.filter((lead) => ['proposta_enviada', 'follow_up', 'fechado'].includes(lead.etapa)).length)}
+      ${crmPipelineMetric('Reunioes', state.leads.filter((lead) => ['reuniao_marcada', 'proposta_enviada', 'fechado'].includes(lead.etapa)).length)}
+      ${crmPipelineMetric('Propostas', state.leads.filter((lead) => ['proposta_enviada', 'fechado'].includes(lead.etapa)).length)}
       ${crmPipelineMetric('Fechados', state.leads.filter((lead) => lead.etapa === 'fechado').length)}
     </div>
     <div class="kanban">${kanban}</div>
+  `;
+}
+
+function renderCrmFollowups() {
+  const followups = getTodayFollowups();
+  const waitingManual = state.leads.filter((lead) => lead.aguardando_resposta_manual && !['fechado', 'perdido'].includes(lead.etapa)).length;
+  const overdue = followups.filter((lead) => daysBetweenDates(lead.data_proximo_contato, isoDate(new Date())) > 0).length;
+  const grouped = crmActiveStages
+    .map((stage) => ({ stage, leads: followups.filter((lead) => lead.etapa === stage) }))
+    .filter((group) => group.leads.length);
+
+  return `
+    ${pageHeader('Follow-ups de hoje', 'Lista manual dos leads que precisam de toque hoje. Nada e enviado automaticamente.', `<button class="secondary-button" data-action="go-view" data-view="crm"><i data-lucide="kanban-square"></i>Ver kanban</button><button class="button" data-action="refresh"><i data-lucide="refresh-cw"></i>Atualizar</button>`)}
+    <div class="crm-pipeline-summary">
+      ${crmPipelineMetric('Para fazer hoje', followups.length)}
+      ${crmPipelineMetric('Atrasados', overdue)}
+      ${crmPipelineMetric('Aguardando resposta', waitingManual)}
+      ${crmPipelineMetric('Leads ativos', state.leads.filter((lead) => !['fechado', 'perdido'].includes(lead.etapa)).length)}
+    </div>
+    <section class="followup-board">
+      ${grouped.length ? grouped.map(renderFollowupGroup).join('') : emptyState('Nenhum follow-up hoje', 'Quando um lead vencer pelo proximo contato, ele aparece aqui.')}
+    </section>
+  `;
+}
+
+function renderFollowupGroup(group) {
+  return `
+    <section class="followup-group crm-stage-${escapeHtml(group.stage)}">
+      <header>
+        <div>
+          <span>${label(group.stage)}</span>
+          <strong>${group.leads.length} lead${group.leads.length === 1 ? '' : 's'}</strong>
+        </div>
+      </header>
+      <div class="followup-list">
+        ${group.leads.map(renderFollowupLead).join('')}
+      </div>
+    </section>
+  `;
+}
+
+function renderFollowupLead(lead) {
+  const stoppedDays = getLeadStoppedDays(lead);
+  const touchNumber = Number(lead.tentativa || 0) + 1;
+  return `
+    <article class="followup-card">
+      <div class="followup-card-main">
+        <strong>${escapeHtml(lead.nome_empresa || 'Lead sem nome')}</strong>
+        <span>${escapeHtml(lead.responsavel || 'Sem responsavel')}</span>
+      </div>
+      <div class="followup-card-meta">
+        ${statusBadge(lead.etapa || 'lead_novo')}
+        <span>Toque ${touchNumber}</span>
+        <span>${stoppedDays === 0 ? 'Parado hoje' : `${stoppedDays} dia${stoppedDays === 1 ? '' : 's'} parado`}</span>
+        <span>Proximo: ${date(lead.data_proximo_contato)}</span>
+      </div>
+      <div class="followup-card-actions">
+        <button class="button" data-action="open-followup-result" data-id="${lead.id}"><i data-lucide="check-circle-2"></i>Marcar feito</button>
+        <button class="icon-button" data-action="open-lead-conversation" data-id="${lead.id}" aria-label="Abrir conversa"><i data-lucide="message-circle"></i></button>
+        <button class="icon-button" data-action="edit" data-entity="crm" data-id="${lead.id}" aria-label="Editar lead"><i data-lucide="pencil"></i></button>
+      </div>
+    </article>
   `;
 }
 
@@ -1384,6 +1455,185 @@ function renderLeadCard(lead) {
 
 function crmPipelineMetric(labelText, value) {
   return `<div><span>${escapeHtml(labelText)}</span><strong>${escapeHtml(value)}</strong></div>`;
+}
+
+function getTodayFollowups() {
+  const today = isoDate(new Date());
+  return state.leads
+    .filter((lead) => !['fechado', 'perdido'].includes(lead.etapa))
+    .filter((lead) => lead.etapa !== 'follow_up')
+    .filter((lead) => !lead.aguardando_resposta_manual)
+    .filter((lead) => lead.data_proximo_contato && String(lead.data_proximo_contato) <= today)
+    .sort((a, b) => {
+      const dateCompare = String(a.data_proximo_contato || '').localeCompare(String(b.data_proximo_contato || ''));
+      if (dateCompare) return dateCompare;
+      return String(a.nome_empresa || '').localeCompare(String(b.nome_empresa || ''));
+    });
+}
+
+function getFollowupCadence(lead) {
+  const configured = lead?.cadencia_followup && typeof lead.cadencia_followup === 'object' ? lead.cadencia_followup : {};
+  const stage = lead?.etapa || 'lead_novo';
+  const values = Array.isArray(configured[stage]) ? configured[stage] : defaultFollowupCadence[stage];
+  return Array.isArray(values) && values.length ? values.map((value) => Number(value)).filter((value) => Number.isFinite(value) && value >= 0) : [2, 4];
+}
+
+function getLeadStoppedDays(lead) {
+  const reference = lead.ultima_interacao || lead.data_proximo_contato;
+  return Math.max(0, daysBetweenDates(toIsoDateOnly(reference), isoDate(new Date())));
+}
+
+function addDaysToIsoDate(value, days) {
+  const base = new Date(`${value || isoDate(new Date())}T00:00:00`);
+  base.setDate(base.getDate() + Number(days || 0));
+  return isoDate(base);
+}
+
+function toIsoDateOnly(value) {
+  if (!value) return '';
+  if (value instanceof Date) return isoDate(value);
+  return String(value).slice(0, 10);
+}
+
+function daysBetweenDates(sinceValue, untilValue) {
+  if (!sinceValue || !untilValue) return 0;
+  const since = new Date(`${toIsoDateOnly(sinceValue)}T00:00:00`);
+  const until = new Date(`${toIsoDateOnly(untilValue)}T00:00:00`);
+  if (Number.isNaN(since.getTime()) || Number.isNaN(until.getTime())) return 0;
+  return Math.floor((until.getTime() - since.getTime()) / 86400000);
+}
+
+function openFollowupResultModal(id) {
+  const lead = state.leads.find((item) => item.id === id);
+  if (!lead) return;
+  modalEyebrow.textContent = 'Follow-up manual';
+  modalTitle.textContent = lead.nome_empresa || 'Lead';
+  modalForm.innerHTML = `
+    <div class="followup-result-modal">
+      <p class="muted">Escolha o resultado do toque. Nada sera enviado automaticamente.</p>
+      <label>Resultado
+        <select name="resultado" required>
+          <option value="sem_resposta">Feito, sem resposta</option>
+          <option value="respondeu">Respondeu</option>
+          <option value="perdido">Perdido</option>
+        </select>
+      </label>
+      <label class="full" data-followup-loss-reason hidden>Motivo da perda<textarea name="motivo_perda" placeholder="Ex: sem resposta apos varias tentativas"></textarea></label>
+      <div class="followup-result-preview">
+        <span>${statusBadge(lead.etapa || 'lead_novo')}</span>
+        <span>Toque ${Number(lead.tentativa || 0) + 1}</span>
+        <span>${getLeadStoppedDays(lead)} dia${getLeadStoppedDays(lead) === 1 ? '' : 's'} parado</span>
+      </div>
+      <div class="form-actions">
+        <button type="button" class="secondary-button" data-modal-cancel>Cancelar</button>
+        <button class="button" type="submit"><i data-lucide="save"></i>Salvar resultado</button>
+      </div>
+    </div>
+  `;
+  modalBackdrop.hidden = false;
+  const resultSelect = modalForm.querySelector('select[name="resultado"]');
+  const lossReason = modalForm.querySelector('[data-followup-loss-reason]');
+  const reasonInput = modalForm.querySelector('textarea[name="motivo_perda"]');
+  resultSelect?.addEventListener('change', () => {
+    const isLost = resultSelect.value === 'perdido';
+    lossReason.hidden = !isLost;
+    reasonInput.required = isLost;
+  });
+  modalForm.querySelector('[data-modal-cancel]')?.addEventListener('click', closeModal);
+  modalForm.onsubmit = (event) => handleFollowupResult(event, id);
+  renderLucide();
+}
+
+async function handleFollowupResult(event, id) {
+  event.preventDefault();
+  const lead = state.leads.find((item) => item.id === id);
+  if (!lead) return;
+  const formData = new FormData(event.target);
+  const result = formData.get('resultado');
+  const reason = String(formData.get('motivo_perda') || '').trim();
+  const now = new Date().toISOString();
+  const patch = buildFollowupResultPatch(lead, result, reason, now);
+
+  try {
+    const updated = await leadCrmService.update(id, patch);
+    await logCrmManualAction(lead, result, patch);
+    const index = state.leads.findIndex((item) => item.id === id);
+    if (index >= 0) state.leads[index] = { ...state.leads[index], ...updated };
+    closeModal();
+    render();
+    if (result === 'respondeu') {
+      toast('Resposta marcada. Avance a etapa manualmente no kanban.');
+    } else if (patch.etapa === 'perdido') {
+      toast('Lead movido para perdido.');
+    } else {
+      toast(`Follow-up reagendado para ${date(patch.data_proximo_contato)}.`);
+    }
+  } catch (error) {
+    showError(error);
+  }
+}
+
+function buildFollowupResultPatch(lead, result, reason, now) {
+  if (result === 'respondeu') {
+    return {
+      aguardando_resposta_manual: true,
+      ultima_interacao: now,
+    };
+  }
+
+  if (result === 'perdido') {
+    return {
+      etapa: 'perdido',
+      motivo_perda: reason || 'perdido apos follow-up manual',
+      ultima_interacao: now,
+      aguardando_resposta_manual: false,
+    };
+  }
+
+  const cadence = getFollowupCadence(lead);
+  const nextAttempt = Number(lead.tentativa || 0) + 1;
+  if (nextAttempt >= cadence.length) {
+    return {
+      etapa: 'perdido',
+      tentativa: nextAttempt,
+      motivo_perda: `sem resposta apos ${nextAttempt} tentativas`,
+      ultima_interacao: now,
+      aguardando_resposta_manual: false,
+    };
+  }
+
+  return {
+    tentativa: nextAttempt,
+    ultima_interacao: now,
+    aguardando_resposta_manual: false,
+    data_proximo_contato: addDaysToIsoDate(isoDate(new Date()), cadence[nextAttempt - 1]),
+  };
+}
+
+async function logCrmManualAction(lead, result, patch) {
+  if (state.crmWebhookLogsMissingTable) return;
+  try {
+    const log = await crmWebhookLogService.create({
+      method: 'frontend',
+      event: 'manual_followup',
+      instance: 'the-midia-master',
+      remote_jid: lead.whatsapp || null,
+      from_me: true,
+      action: result,
+      lead_id: lead.id,
+      payload: {
+        lead_id: lead.id,
+        nome_empresa: lead.nome_empresa,
+        etapa_anterior: lead.etapa,
+        resultado: result,
+        patch,
+        usuario: state.session?.user?.email || null,
+      },
+    });
+    state.crmWebhookLogs = [log, ...state.crmWebhookLogs].slice(0, 600);
+  } catch (error) {
+    console.warn('Nao foi possivel gravar log do follow-up.', error);
+  }
 }
 
 function openLeadConversation(id) {
@@ -3130,6 +3380,7 @@ function relatorioActionButtons(id) {
 function bindGlobalActions() {
   document.querySelectorAll('[data-action]').forEach((el) => {
     const action = el.dataset.action;
+    if (action === 'go-view') el.addEventListener('click', () => navigate(el.dataset.view));
     if (action === 'new') el.addEventListener('click', () => openForm(el.dataset.entity, null, el.dataset.cliente ? { cliente_id: el.dataset.cliente } : {}));
     if (action === 'new-related') el.addEventListener('click', () => openForm(el.dataset.entity, null, { cliente_id: state.detailClienteId }));
     if (action === 'edit') el.addEventListener('click', () => openForm(el.dataset.entity, el.dataset.id));
@@ -3149,6 +3400,7 @@ function bindGlobalActions() {
     if (action === 'detail-tab') el.addEventListener('click', () => { state.detailTab = el.dataset.tab; render(); });
     if (action === 'convert-lead') el.addEventListener('click', () => convertLead(el.dataset.id));
     if (action === 'open-lead-conversation') el.addEventListener('click', () => openLeadConversation(el.dataset.id));
+    if (action === 'open-followup-result') el.addEventListener('click', () => openFollowupResultModal(el.dataset.id));
     if (action === 'move-lead') el.addEventListener('change', () => moveLead(el.dataset.id, el.value));
     if (action === 'toggle-onboarding') el.addEventListener('change', () => updateOnboarding(el.dataset.id, { [el.dataset.field]: el.checked }));
     if (action === 'onboarding-notes') el.addEventListener('blur', () => updateOnboarding(el.dataset.id, { observacoes: el.value }));
@@ -3383,6 +3635,13 @@ async function handleSubmit(event, entity, id) {
     payload.meta_ads_act_snapshot = state.clientes.find((cliente) => cliente.id === payload.cliente_id)?.meta_ads_act || null;
   }
   if (entity === 'tarefas') normalizeTaskPayload(payload);
+  if (entity === 'crm' && id) {
+    const currentLead = state.leads.find((lead) => lead.id === id);
+    if (currentLead?.etapa && payload.etapa && currentLead.etapa !== payload.etapa) {
+      payload.aguardando_resposta_manual = false;
+      payload.tentativa = 0;
+    }
+  }
 
   try {
     await getService(entity)[id ? 'update' : 'create'](id || payload, payload);
@@ -3855,9 +4114,10 @@ async function deleteChecklistItem(id, li, ii) {
 
 async function moveLead(id, etapa) {
   try {
-    await leadCrmService.moveStage(id, etapa);
+    const patch = { aguardando_resposta_manual: false, tentativa: 0 };
+    await leadCrmService.moveStage(id, etapa, patch);
     const idx = state.leads.findIndex((item) => item.id === id);
-    if (idx >= 0) state.leads[idx] = { ...state.leads[idx], etapa };
+    if (idx >= 0) state.leads[idx] = { ...state.leads[idx], etapa, ...patch };
     render();
     toast(`Lead movido para ${label(etapa)}.`);
   } catch (error) {

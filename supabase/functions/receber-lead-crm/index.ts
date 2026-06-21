@@ -194,24 +194,48 @@ function normalizeLeadPayload(payload: Record<string, any>) {
     payload.whatsapp,
     payload.phone,
     payload.telefone,
+    payload.remoteJid,
     data.whatsapp,
     data.phone,
+    data.remoteJid,
     data.sender,
     data.participant,
     remoteJid
   );
   const whatsapp = normalizePhone(rawPhone);
-  const name = firstFilled(
+  const explicitName = firstFilled(
     payload.nome_empresa,
     payload.empresa,
-    payload.name,
     payload.nome,
     data.nome_empresa,
-    data.empresa,
-    data.pushName,
-    data.senderName,
+    data.empresa
+  );
+  const remoteContactName = firstFilled(
+    payload.contactName,
+    payload.contact_name,
+    payload.receiverName,
+    payload.receiver_name,
+    payload.chatName,
+    payload.chat_name,
+    data.contactName,
+    data.contact_name,
+    data.receiverName,
+    data.receiver_name,
+    data.chatName,
+    data.chat_name,
+    data.verifiedBizName,
+    data.notifyName
+  );
+  const inboundName = firstFilled(
+    payload.name,
     data.name,
-    whatsapp
+    data.pushName,
+    data.senderName
+  );
+  const name = sanitizeLeadName(
+    fromMe
+      ? firstFilled(explicitName, remoteContactName, whatsapp ? `Lead ${whatsapp}` : '')
+      : firstFilled(explicitName, inboundName, whatsapp ? `Lead ${whatsapp}` : '')
   );
   const responsavel = firstFilled(payload.responsavel, payload.contato, data.pushName, data.senderName, data.name, name);
   const origin = fromMe
@@ -226,7 +250,7 @@ function normalizeLeadPayload(payload: Record<string, any>) {
   ].filter(Boolean).join('\n');
 
   return {
-    nome_empresa: String(name || 'Lead WhatsApp').slice(0, 160),
+    nome_empresa: String(name || (whatsapp ? `Lead ${whatsapp}` : 'Lead WhatsApp')).slice(0, 160),
     responsavel: String(responsavel || '').slice(0, 160) || null,
     whatsapp,
     email: firstFilled(payload.email, data.email) || null,
@@ -258,6 +282,14 @@ function extractMessageText(source: Record<string, any>) {
 
 function firstFilled(...values: unknown[]) {
   return values.find((value) => String(value || '').trim()) as string | undefined;
+}
+
+function sanitizeLeadName(value: unknown) {
+  const clean = String(value || '').trim();
+  if (!clean) return '';
+  const agencyNames = ['roberto moura the midia marketing', 'the midia marketing', 'the midia'];
+  if (agencyNames.includes(clean.toLowerCase())) return '';
+  return clean;
 }
 
 function normalizePhone(value: unknown) {

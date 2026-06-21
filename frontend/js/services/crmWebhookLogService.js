@@ -10,4 +10,14 @@ export const crmWebhookLogService = {
     if (error) throw error;
     return data || [];
   },
+
+  async create(payload) {
+    const { data, error } = await supabase
+      .from('crm_webhook_logs')
+      .insert(payload)
+      .select('id, received_at, event, instance, remote_jid, from_me, action, lead_id, error, payload')
+      .single();
+    if (error) throw error;
+    return data;
+  },
 };
