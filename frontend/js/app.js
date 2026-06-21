@@ -1312,8 +1312,8 @@ function renderCrm() {
           </div>
           <small>${money(stageValue)}</small>
         </header>
-        <div class="kanban-column-body">
-          ${leads.map(renderLeadCard).join('') || emptyState('Sem leads', 'Use o seletor de etapa para mover oportunidades.')}
+        <div class="kanban-column-body" data-crm-drop-stage="${escapeHtml(stage)}">
+          ${leads.map(renderLeadCard).join('') || emptyState('Sem leads', 'Arraste leads para esta etapa.')}
         </div>
       </section>
     `;
@@ -1333,28 +1333,12 @@ function renderCrm() {
 
 function renderLeadCard(lead) {
   return `
-    <article class="lead-card lead-potential-${escapeHtml(lead.potencial || 'medio')}">
-      <div class="lead-card-top">
-        <strong>${escapeHtml(lead.nome_empresa)}</strong>
-        ${statusBadge(lead.potencial || 'medio')}
-      </div>
-      <p>${escapeHtml(lead.responsavel || lead.whatsapp || 'Sem contato informado')}</p>
-      <div class="lead-card-meta">
-        <span>${escapeHtml(lead.nicho || lead.origem_lead || 'Sem nicho')}</span>
-        <span>${money(lead.investimento_disponivel || lead.ticket_medio || 0)}</span>
-      </div>
-      ${lead.proxima_acao || lead.data_proximo_contato ? `
-        <div class="lead-next-action">
-          <span>${escapeHtml(lead.proxima_acao || 'Proximo contato')}</span>
-          <strong>${date(lead.data_proximo_contato)}</strong>
-        </div>
-      ` : ''}
-      <footer>
-        <select data-action="move-lead" data-id="${lead.id}">
-          ${crmStages.map((stage) => `<option value="${stage}" ${lead.etapa === stage ? 'selected' : ''}>${label(stage)}</option>`).join('')}
-        </select>
+    <article class="lead-card lead-potential-${escapeHtml(lead.potencial || 'medio')}" draggable="true" data-lead-id="${lead.id}" data-lead-stage="${escapeHtml(lead.etapa || 'lead_novo')}">
+      <strong class="lead-card-name">${escapeHtml(lead.nome_empresa)}</strong>
+      <div class="lead-card-actions">
         <button class="icon-button" data-action="edit" data-entity="crm" data-id="${lead.id}" aria-label="Editar lead"><i data-lucide="pencil"></i></button>
-      </footer>
+        <button class="icon-button danger" data-action="delete" data-entity="crm" data-id="${lead.id}" aria-label="Excluir lead"><i data-lucide="trash-2"></i></button>
+      </div>
     </article>
   `;
 }
@@ -3085,6 +3069,41 @@ function bindGlobalActions() {
       toast('Conexao do WhatsApp limpa.');
     });
   });
+  bindCrmDragAndDrop();
+}
+
+function bindCrmDragAndDrop() {
+  document.querySelectorAll('.lead-card[draggable="true"]').forEach((card) => {
+    card.addEventListener('dragstart', (event) => {
+      event.dataTransfer.effectAllowed = 'move';
+      event.dataTransfer.setData('text/plain', card.dataset.leadId);
+      card.classList.add('is-dragging');
+    });
+    card.addEventListener('dragend', () => {
+      card.classList.remove('is-dragging');
+      document.querySelectorAll('.kanban-column-body.is-drop-target').forEach((column) => column.classList.remove('is-drop-target'));
+    });
+  });
+
+  document.querySelectorAll('[data-crm-drop-stage]').forEach((column) => {
+    column.addEventListener('dragover', (event) => {
+      event.preventDefault();
+      event.dataTransfer.dropEffect = 'move';
+      column.classList.add('is-drop-target');
+    });
+    column.addEventListener('dragleave', (event) => {
+      if (!column.contains(event.relatedTarget)) column.classList.remove('is-drop-target');
+    });
+    column.addEventListener('drop', async (event) => {
+      event.preventDefault();
+      column.classList.remove('is-drop-target');
+      const id = event.dataTransfer.getData('text/plain');
+      const etapa = column.dataset.crmDropStage;
+      const lead = state.leads.find((item) => item.id === id);
+      if (!id || !etapa || lead?.etapa === etapa) return;
+      await moveLead(id, etapa);
+    });
+  });
 }
 
 function openForm(entity, id = null, defaults = {}) {
@@ -3601,8 +3620,10 @@ async function deleteChecklistItem(id, li, ii) {
 async function moveLead(id, etapa) {
   try {
     await leadCrmService.moveStage(id, etapa);
-    await loadAll();
+    const idx = state.leads.findIndex((item) => item.id === id);
+    if (idx >= 0) state.leads[idx] = { ...state.leads[idx], etapa };
     render();
+    toast(`Lead movido para ${label(etapa)}.`);
   } catch (error) {
     showError(error);
   }
