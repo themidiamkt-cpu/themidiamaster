@@ -38,6 +38,7 @@ let googlePlacesMap = null;
 const state = {
   view: getStoredView() || 'dashboard',
   taskDetailId: null,
+  activeConversationLeadId: null,
   taskView: 'hoje',
   taskDoneExpanded: {},
   clientes: [],
@@ -177,6 +178,7 @@ const services = {
 };
 
 let initialized = false;
+let crmRealtimeChannel = null;
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', init, { once: true });
 } else {
@@ -195,6 +197,7 @@ async function init() {
   if (initialized) return;
   initialized = true;
   await loadAll();
+  setupCrmRealtime();
   render();
 }
 
@@ -248,6 +251,7 @@ async function loadAll() {
       ]), 12000, 'O Supabase demorou para carregar os dados. Mostrando o painel em modo vazio ate atualizar.');
       Object.assign(state, { clientes, leads, crmWebhookLogs, campanhas, relatorios, vendas, metaAdsDailyInsights, metaAdsAccountHealth, gmnAnalises, tarefas, diarios, equipe, alertas, metas });
       updateAlertasBadge();
+      setupCrmRealtime();
       return;
     }
 
@@ -266,6 +270,7 @@ async function loadAll() {
     ]), 12000, 'O Supabase demorou para carregar os dados. Mostrando o painel em modo vazio ate atualizar.');
     Object.assign(state, { clientes, leads: [], crmWebhookLogs: [], campanhas: [], relatorios, vendas, metaAdsDailyInsights, metaAdsAccountHealth, gmnAnalises, tarefas, diarios, equipe: [], alertas, metas });
     updateAlertasBadge();
+    teardownCrmRealtime();
   } catch (error) {
     state.loadError = error.message || 'Nao foi possivel carregar os dados do Supabase.';
     showError(error);
@@ -389,6 +394,88 @@ async function safeDiaryList() {
     }
     throw error;
   }
+}
+
+function setupCrmRealtime() {
+  if (!state.session || !isMainAdmin()) {
+    teardownCrmRealtime();
+    return;
+  }
+  if (crmRealtimeChannel) return;
+  if (state.session.access_token && supabase.realtime?.setAuth) {
+    supabase.realtime.setAuth(state.session.access_token);
+  }
+  crmRealtimeChannel = supabase
+    .channel('the-midia-master-crm-realtime')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'leads_crm' }, handleLeadRealtimeChange)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'crm_webhook_logs' }, handleCrmLogRealtimeChange)
+    .subscribe((status) => {
+      if (['CHANNEL_ERROR', 'TIMED_OUT', 'CLOSED'].includes(status)) {
+        console.warn('Realtime CRM status:', status);
+      }
+    });
+}
+
+function teardownCrmRealtime() {
+  if (!crmRealtimeChannel) return;
+  supabase.removeChannel(crmRealtimeChannel);
+  crmRealtimeChannel = null;
+}
+
+function handleLeadRealtimeChange(payload) {
+  if (!payload) return;
+  if (payload.eventType === 'DELETE') {
+    const id = payload.old?.id;
+    if (id) state.leads = state.leads.filter((lead) => lead.id !== id);
+  } else if (payload.new?.id) {
+    upsertStateRow(state.leads, payload.new, sortByCreatedAtDesc);
+  }
+  updateCrmRealtimeView();
+}
+
+function handleCrmLogRealtimeChange(payload) {
+  if (!payload || state.crmWebhookLogsMissingTable) return;
+  if (payload.eventType === 'DELETE') {
+    const id = payload.old?.id;
+    if (id) state.crmWebhookLogs = state.crmWebhookLogs.filter((log) => log.id !== id);
+  } else if (payload.new?.id) {
+    upsertStateRow(state.crmWebhookLogs, payload.new, sortByReceivedAtDesc);
+    state.crmWebhookLogs = state.crmWebhookLogs.slice(0, 600);
+  }
+  updateCrmRealtimeView();
+  refreshActiveConversation();
+}
+
+function upsertStateRow(list, row, sorter) {
+  const index = list.findIndex((item) => item.id === row.id);
+  if (index >= 0) {
+    list[index] = { ...list[index], ...row };
+  } else {
+    list.unshift(row);
+  }
+  if (sorter) list.sort(sorter);
+}
+
+function sortByCreatedAtDesc(a, b) {
+  return String(b.created_at || '').localeCompare(String(a.created_at || ''));
+}
+
+function sortByReceivedAtDesc(a, b) {
+  return String(b.received_at || b.created_at || '').localeCompare(String(a.received_at || a.created_at || ''));
+}
+
+function updateCrmRealtimeView() {
+  if (!state.session) return;
+  if (['crm', 'crmFollowups', 'dashboard'].includes(state.view)) {
+    render();
+  }
+}
+
+function refreshActiveConversation() {
+  if (!state.activeConversationLeadId || modalBackdrop.hidden) return;
+  const lead = state.leads.find((item) => item.id === state.activeConversationLeadId);
+  if (!lead) return;
+  openLeadConversation(lead.id);
 }
 
 function isMissingDiaryTableError(error) {
@@ -573,8 +660,10 @@ function bindLogin() {
 }
 
 async function logout() {
+  teardownCrmRealtime();
   await supabase.auth.signOut();
   state.session = null;
+  state.activeConversationLeadId = null;
   render();
 }
 
@@ -1822,6 +1911,7 @@ async function logCrmManualAction(lead, result, patch, extraPayload = {}) {
 function openLeadConversation(id) {
   const lead = state.leads.find((item) => item.id === id);
   if (!lead) return;
+  state.activeConversationLeadId = id;
   const messages = getLeadConversationMessages(lead);
   modalEyebrow.textContent = 'Conversa';
   modalTitle.textContent = lead.nome_empresa || 'Lead';
@@ -5141,6 +5231,7 @@ function closeModal() {
   modalBackdrop.hidden = true;
   modalForm.innerHTML = '';
   modalForm.onsubmit = null;
+  state.activeConversationLeadId = null;
 }
 
 function getService(entity) {
