@@ -4576,7 +4576,7 @@ async function createPaidTrafficTasks(cliente) {
   await Promise.all(templates.map((template) => createTaskIfMissing({
     cliente_id: cliente.id,
     titulo: template.titulo,
-    categoria: 'Trafego pago',
+    categoria: 'Trafego Pago',
     responsavel: template.responsavel || owner,
     prioridade: 'media',
     status: 'pendente',
