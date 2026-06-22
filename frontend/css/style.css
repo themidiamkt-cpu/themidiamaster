@@ -3900,3 +3900,153 @@ label { display: grid; gap: 7px; color: var(--muted); font-size: 12px; font-weig
   .client-metric:nth-child(8n) { border-right: 1px solid var(--line-soft); }
   .client-metric:nth-child(2n) { border-right: none; }
 }
+
+.playbook-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(280px, .8fr);
+  gap: 20px;
+  align-items: end;
+}
+
+.playbook-hero h2 {
+  margin: 4px 0 8px;
+  font-size: 28px;
+  color: var(--text);
+}
+
+.playbook-hero p {
+  max-width: 760px;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.playbook-score-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.playbook-grid {
+  align-items: stretch;
+}
+
+.playbook-list {
+  display: grid;
+  gap: 12px;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.playbook-list strong {
+  color: var(--text);
+}
+
+.playbook-columns {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.playbook-step {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 16px;
+  background: #f8fafc;
+}
+
+.playbook-step strong,
+.playbook-step span {
+  display: block;
+}
+
+.playbook-step strong {
+  color: var(--text);
+  font-size: 15px;
+}
+
+.playbook-step span {
+  margin-top: 6px;
+  color: var(--brand);
+  font-weight: 900;
+}
+
+.playbook-step p {
+  margin-top: 10px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.playbook-checklist {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.playbook-checklist.vertical {
+  display: grid;
+}
+
+.playbook-checklist span {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  background: #fff;
+  line-height: 1.35;
+}
+
+.playbook-checklist i {
+  width: 16px;
+  height: 16px;
+  color: var(--brand);
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.playbook-angle-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.playbook-angle-grid article {
+  min-height: 120px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px;
+  background: #fff;
+}
+
+.playbook-angle-grid strong {
+  display: block;
+  color: var(--text);
+  margin-bottom: 8px;
+}
+
+.playbook-angle-grid p {
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.playbook-note {
+  margin-top: 14px;
+  padding: 14px 16px;
+  border-left: 4px solid var(--brand);
+  background: #ecfeff;
+  color: var(--text);
+  border-radius: 8px;
+  line-height: 1.5;
+}
+
+@media (max-width: 1000px) {
+  .playbook-hero,
+  .playbook-columns,
+  .playbook-angle-grid {
+    grid-template-columns: 1fr;
+  }
+}

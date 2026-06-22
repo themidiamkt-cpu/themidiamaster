@@ -29,8 +29,8 @@ const fixedGoogleMapsApiKey = 'AIzaSyAyH7teIp1Xjprln7TaA1i_dIY8TB0_HgE';
 const whatsappWebhookUrl = 'https://automacao2.themidiamarketing.com.br/webhook/conectar-cliente';
 const mainAdminEmail = 'themidiamkt@gmail.com';
 const viewStorageKey = 'theMidiaMaster.activeView';
-const adminViews = ['dashboard', 'dashboardClientes', 'clientes', 'relatorios', 'crm', 'crmFollowups', 'metaAds', 'gbp', 'diario', 'tarefas', 'equipe', 'metas', 'alertas', 'config'];
-const trafficManagerViews = ['dashboardClientes', 'metaAds', 'gbp', 'diario', 'tarefas', 'metas', 'alertas'];
+const adminViews = ['dashboard', 'dashboardClientes', 'clientes', 'relatorios', 'crm', 'crmFollowups', 'metaAds', 'gbp', 'diario', 'tarefas', 'playbooks', 'equipe', 'metas', 'alertas', 'config'];
+const trafficManagerViews = ['dashboardClientes', 'metaAds', 'gbp', 'diario', 'tarefas', 'playbooks', 'metas', 'alertas'];
 const teamViews = trafficManagerViews;
 let googlePlacesLoader = null;
 let googlePlacesMap = null;
@@ -595,6 +595,7 @@ function render() {
     gbp: renderGbp,
     diario: renderDiario,
     tarefas: renderTarefas,
+    playbooks: renderPlaybooks,
     equipe: renderEquipe,
     metas: renderMetas,
     alertas: renderAlertas,
@@ -3242,6 +3243,148 @@ function renderCategoryGroup(cat, view) {
       </div>
       ${activeGroupsHtml}
       ${doneHtml}
+    </section>
+  `;
+}
+
+function renderPlaybooks() {
+  const setupItems = [
+    'Objetivo padrao: Engajamento para Mensagens no WhatsApp.',
+    'Prospecção ampla com raio de 5 a 10 km e idade de 18 a 45 anos.',
+    'Usar Advantage+ em posicionamentos, priorizando Reels e Stories.',
+    'Separar retargeting com engajadores, lista de WhatsApp e visitantes.',
+    'Com verba baixa, preferir ABO para controlar melhor cada conjunto.',
+  ];
+  const creativeAngles = [
+    ['Portfolio e resultado', 'Mostrar furos, joias, variedade, antes e depois. Gera desejo.'],
+    ['Quebra de medo', 'Higiene, material descartavel, profissional certificado, dor e seguranca.'],
+    ['Oferta', 'Combo, joia inclusa, condicao da semana ou data comemorativa.'],
+    ['Prova social', 'Depoimentos, reacao na hora do furo e avaliacoes.'],
+    ['Bastidores', 'Processo, esterilizacao, acolhimento e rotina do estudio.'],
+    ['Educativo', 'Tipos de piercing, cuidados pos e escolha de joia.'],
+  ];
+  const routineItems = [
+    'Diario: olhar entrega e custo por conversa. Pausar criativo acima de R$ 20 por conversa.',
+    'A cada 7 dias: trocar o pior criativo, conferir frequencia e ajustar verba.',
+    'Semanal: enviar relatorio em linguagem simples para o cliente no WhatsApp.',
+    'Mensal: planejar ganchos, novas ofertas e novos criativos.',
+  ];
+  const onboardingRows = [
+    ['Setup', 'Dias 1 a 3', 'Acessos, WhatsApp configurado, briefing, fotos e videos do portfolio.'],
+    ['Criativos iniciais', 'Dias 3 a 7', 'Produzir os 6 angulos e subir a estrutura padrao.'],
+    ['Validacao', 'Semana 2 a 3', 'Sair do aprendizado e achar criativo e publico campeoes.'],
+    ['Otimizacao', 'Semana 4', 'Cortar o que nao anda, escalar campeao e entregar primeiro relatorio.'],
+  ];
+
+  return `
+    ${pageHeader('Playbooks', 'Metodos operacionais para o gestor aplicar em clientes novos.', '')}
+    <section class="panel playbook-hero">
+      <div>
+        <p class="eyebrow">Trafego pago para estudio de piercing</p>
+        <h2>Metodo The Midia Marketing</h2>
+        <p>Use este playbook sempre que um estudio de piercing entrar. A base vem do case Audrei Piercing e deve ser atualizada a cada novo aprendizado.</p>
+      </div>
+      <div class="playbook-score-grid">
+        ${areaSummary('Objetivo padrao', 'Mensagens no WhatsApp')}
+        ${areaSummary('Régua boa', 'ate R$ 10 por conversa')}
+        ${areaSummary('Cortar', 'acima de R$ 20 por conversa')}
+      </div>
+    </section>
+
+    <section class="grid-2 playbook-grid">
+      <article class="panel">
+        <div class="panel-header"><h3>Por que o nicho funciona</h3></div>
+        <div class="playbook-list">
+          <p><strong>Venda mais facil:</strong> a agencia chega como especialista em estudios de piercing.</p>
+          <p><strong>Entrega mais rapida:</strong> mesma conta, mesmos angulos e mesmo onboarding.</p>
+          <p><strong>Margem maior:</strong> processo padronizado permite escalar sem depender de improviso.</p>
+        </div>
+      </article>
+      <article class="panel">
+        <div class="panel-header"><h3>Como o cliente decide</h3></div>
+        <div class="playbook-list">
+          <p>Decisao visual e por desejo. Portfolio converte mais que texto longo.</p>
+          <p>Compra local por agendamento. O anuncio precisa puxar conversa no WhatsApp.</p>
+          <p>Medo e a principal objecao. Criativo precisa mostrar seguranca, higiene e acolhimento.</p>
+        </div>
+      </article>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header"><h3>Estrutura de conta padrao</h3><span class="muted">Referencia: cerca de R$ 50 por dia</span></div>
+      <div class="playbook-columns">
+        <div class="playbook-step">
+          <strong>Nucleo de conversao</strong>
+          <span>R$ 23 por dia</span>
+          <p>Campanha de Mensagens com 1 conjunto amplo. Motor principal do WhatsApp.</p>
+        </div>
+        <div class="playbook-step">
+          <strong>Topo de funil local</strong>
+          <span>R$ 10 por dia</span>
+          <p>Impulsionamento de Reels mostrando estudio e localizacao para alcance local.</p>
+        </div>
+        <div class="playbook-step">
+          <strong>Retargeting e teste</strong>
+          <span>R$ 17 por dia</span>
+          <p>Engajadores, lista de WhatsApp, visitantes e teste do proximo criativo.</p>
+        </div>
+      </div>
+      <div class="playbook-checklist">
+        ${setupItems.map((item) => `<span><i data-lucide="check-circle-2"></i>${escapeHtml(item)}</span>`).join('')}
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header"><h3>Banco de criativos</h3><span class="muted">Manter 3 a 5 criativos ativos</span></div>
+      <div class="playbook-angle-grid">
+        ${creativeAngles.map(([title, text]) => `
+          <article>
+            <strong>${escapeHtml(title)}</strong>
+            <p>${escapeHtml(text)}</p>
+          </article>
+        `).join('')}
+      </div>
+      <div class="playbook-note">
+        <strong>Regra de ouro:</strong> video curto com pessoa real em campanha de Mensagens e o formato prioritario. Clique e alcance podem enganar. O que importa e conversa qualificada no WhatsApp.
+      </div>
+    </section>
+
+    <section class="grid-2 playbook-grid">
+      <article class="panel">
+        <div class="panel-header"><h3>Benchmarks do Audrei</h3></div>
+        <div class="kv">
+          ${areaSummary('Investimento total', 'R$ 32.353')}
+          ${areaSummary('Conversas geradas', '6.294')}
+          ${areaSummary('Custo medio por conversa', 'R$ 5,14')}
+          ${areaSummary('Conversas que viraram venda', '1.708, 27,1%')}
+          ${areaSummary('Ticket medio', 'R$ 524')}
+          ${areaSummary('ROAS', '27,70x')}
+        </div>
+      </article>
+      <article class="panel">
+        <div class="panel-header"><h3>Rotina do gestor</h3></div>
+        <div class="playbook-checklist vertical">
+          ${routineItems.map((item) => `<span><i data-lucide="calendar-check"></i>${escapeHtml(item)}</span>`).join('')}
+        </div>
+      </article>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header"><h3>Primeiros 30 dias</h3><span class="muted">Onboarding do estudio novo</span></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Fase</th><th>Quando</th><th>O que fazer</th></tr></thead>
+          <tbody>
+            ${onboardingRows.map(([phase, when, action]) => `
+              <tr>
+                <td><strong>${escapeHtml(phase)}</strong></td>
+                <td>${escapeHtml(when)}</td>
+                <td>${escapeHtml(action)}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
     </section>
   `;
 }
