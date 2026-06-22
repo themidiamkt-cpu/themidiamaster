@@ -41,6 +41,7 @@ const state = {
   taskDetailId: null,
   activeConversationLeadId: null,
   taskView: 'hoje',
+  taskResponsibleFilter: 'all',
   taskDoneExpanded: {},
   clientes: [],
   leads: [],
@@ -3153,19 +3154,22 @@ function formatGbpPoint(point) {
 }
 
 function renderTarefas() {
-  const overdue = getOverdueTasks().length;
-  const openTasks = state.tarefas.filter((t) => !['concluida', 'cancelada'].includes(t.status)).length;
-  const doneTasks = state.tarefas.filter((t) => t.status === 'concluida').length;
   const view = state.taskView || 'hoje';
+  const filteredTasks = filterTasksByResponsible(state.tarefas);
+  const overdue = getOverdueTasks(filteredTasks).length;
+  const openTasks = filteredTasks.filter((t) => !['concluida', 'cancelada'].includes(t.status)).length;
+  const doneTasks = filteredTasks.filter((t) => t.status === 'concluida').length;
+  const responsibleOptions = getTaskResponsibleOptions();
+  const selectedResponsible = state.taskResponsibleFilter || 'all';
   const viewTabs = [
     { key: 'hoje', label: 'Hoje' },
     { key: 'semana', label: 'Esta semana' },
     { key: 'todas', label: 'Todas' },
   ];
 
-  // Agrupar por categoria
-  const cats = [...new Set(state.tarefas.map((t) => t.categoria || 'Geral'))].sort();
-  const categoriesHtml = cats.map((cat) => renderCategoryGroup(cat, view)).join('');
+  const categoriesHtml = view === 'hoje'
+    ? renderTodayTaskList(filteredTasks)
+    : [...new Set(filteredTasks.map((t) => t.categoria || 'Geral'))].sort().map((cat) => renderCategoryGroup(cat, view, filteredTasks)).join('');
 
   return `
     <section class="task-page">
@@ -3174,7 +3178,7 @@ function renderTarefas() {
         ${taskSummaryCard('Abertas', openTasks, 'circle-dot', 'blue')}
         ${taskSummaryCard('Vencidas', overdue, 'calendar-alert', overdue ? 'red' : 'green')}
         ${taskSummaryCard('Concluidas', doneTasks, 'badge-check', 'green')}
-        ${taskSummaryCard('Total', state.tarefas.length, 'list-checks', 'neutral')}
+        ${taskSummaryCard('Total', filteredTasks.length, 'list-checks', 'neutral')}
       </div>
       <section class="task-board-panel">
         <div class="task-toolbar">
@@ -3182,6 +3186,14 @@ function renderTarefas() {
             ${viewTabs.map((t) => `<button type="button" class="${view === t.key ? 'active' : ''}" data-action="task-view" data-view="${t.key}">${t.label}</button>`).join('')}
           </div>
           <div class="task-toolbar-actions">
+            <label class="task-filter-label">
+              <i data-lucide="user-round"></i>
+              <select data-action="task-responsible-filter">
+                <option value="all"${selectedResponsible === 'all' ? ' selected' : ''}>Todos os responsaveis</option>
+                <option value="__none__"${selectedResponsible === '__none__' ? ' selected' : ''}>Sem responsavel</option>
+                ${responsibleOptions.map((name) => `<option value="${escapeHtml(name)}"${selectedResponsible === name ? ' selected' : ''}>${escapeHtml(name)}</option>`).join('')}
+              </select>
+            </label>
             <span><i data-lucide="arrow-up-down"></i>Vencimento</span>
           </div>
         </div>
@@ -3212,8 +3224,52 @@ function filterTasksForView(tasks, view) {
   return tasks;
 }
 
-function renderCategoryGroup(cat, view) {
-  const catTasks = state.tarefas.filter((t) => (t.categoria || 'Geral') === cat);
+function getTaskResponsibleOptions(tasks = state.tarefas) {
+  return [...new Set(tasks.map((task) => String(task.responsavel || '').trim()).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b, 'pt-BR'));
+}
+
+function filterTasksByResponsible(tasks) {
+  const selected = state.taskResponsibleFilter || 'all';
+  if (selected === 'all') return tasks;
+  if (selected === '__none__') return tasks.filter((task) => !String(task.responsavel || '').trim());
+  return tasks.filter((task) => String(task.responsavel || '').trim() === selected);
+}
+
+function sortTasksByDueAndTitle(a, b) {
+  const dateA = a.data_vencimento || '9999-12-31';
+  const dateB = b.data_vencimento || '9999-12-31';
+  if (dateA !== dateB) return dateA.localeCompare(dateB);
+  return String(a.titulo || '').localeCompare(String(b.titulo || ''), 'pt-BR');
+}
+
+function renderTodayTaskList(tasks) {
+  const active = filterTasksForView(tasks.filter((t) => !['concluida', 'cancelada'].includes(t.status)), 'hoje')
+    .sort(sortTasksByDueAndTitle);
+  return `
+    <section class="task-category-group task-today-group">
+      <div class="task-category-header">
+        <i data-lucide="calendar-check"></i>
+        <strong>Hoje</strong>
+        <em>${active.length}</em>
+      </div>
+      <div class="task-list-head">
+        <span>Nome</span>
+        <span>Responsavel</span>
+        <span>Vencimento</span>
+        <span>Prioridade</span>
+        <span></span>
+      </div>
+      <div class="task-status-rows">
+        ${active.length ? active.map(renderTaskRow).join('') : `<div class="task-empty-row">Nenhuma tarefa para hoje.</div>`}
+        <button class="task-add-row-btn" type="button" data-action="new" data-entity="tarefas"><i data-lucide="plus"></i>Adicionar Tarefa</button>
+      </div>
+    </section>
+  `;
+}
+
+function renderCategoryGroup(cat, view, tasks = state.tarefas) {
+  const catTasks = tasks.filter((t) => (t.categoria || 'Geral') === cat);
   const active = filterTasksForView(catTasks.filter((t) => !['concluida', 'cancelada'].includes(t.status)), view);
   const done = catTasks.filter((t) => t.status === 'concluida');
   const cancelled = catTasks.filter((t) => t.status === 'cancelada');
@@ -4025,6 +4081,7 @@ function bindGlobalActions() {
     if (action === 'client-dashboard-origin') el.addEventListener('change', () => { state.dashboardClientesOrigem = el.value || 'all'; render(); });
     if (action === 'refresh-client-meta-costs') el.addEventListener('click', () => loadClientMetaCosts(true));
     if (action === 'task-view') el.addEventListener('click', () => { state.taskView = el.dataset.view; render(); });
+    if (action === 'task-responsible-filter') el.addEventListener('change', () => { state.taskResponsibleFilter = el.value || 'all'; render(); });
     if (action === 'toggle-done') el.addEventListener('click', () => {
       const cat = decodeURIComponent(el.dataset.cat);
       if (!state.taskDoneExpanded) state.taskDoneExpanded = {};
@@ -5512,10 +5569,10 @@ function getClienteName(id) {
   return state.clientes.find((cliente) => cliente.id === id)?.nome_empresa || '';
 }
 
-function getOverdueTasks() {
+function getOverdueTasks(tasks = state.tarefas) {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  return state.tarefas.filter((task) => task.data_vencimento && !['concluida', 'cancelada'].includes(task.status) && new Date(`${task.data_vencimento}T00:00:00`) < today);
+  return tasks.filter((task) => task.data_vencimento && !['concluida', 'cancelada'].includes(task.status) && new Date(`${task.data_vencimento}T00:00:00`) < today);
 }
 
 function daysSince(value) {

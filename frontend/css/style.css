@@ -601,6 +601,31 @@ td strong { display: block; margin-bottom: 3px; }
   cursor: default;
   font-size: 12px;
 }
+.task-filter-label {
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #ffffff;
+  color: var(--muted);
+}
+.task-filter-label svg {
+  width: 14px;
+  height: 14px;
+}
+.task-filter-label select {
+  min-width: 170px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #475569;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+}
 
 /* Column headers */
 .task-list-head,
