@@ -8,6 +8,7 @@ import { onboardingService } from './services/onboardingService.js';
 import { ativoClienteService } from './services/ativoClienteService.js';
 import { observacaoClienteService } from './services/observacaoClienteService.js';
 import { equipeService } from './services/equipeService.js';
+import { equipeClienteService } from './services/equipeClienteService.js';
 import { diarioBordoService } from './services/diarioBordoService.js';
 import { alertaAnomaliaService } from './services/alertaAnomaliaService.js';
 import { metaClienteService } from './services/metaClienteService.js';
@@ -61,6 +62,7 @@ const state = {
   diarios: [],
   diarioMissingTable: false,
   equipe: [],
+  equipeClientes: [],
   metas: [],
   metaRowDrafts: {},
   alertas: [],
@@ -233,7 +235,7 @@ async function loadAll() {
 
     if (isMainAdmin()) {
       const dashboardRange = getFourWeeksRange();
-      const [clientes, leads, crmWebhookLogs, campanhas, relatorios, vendas, metaAdsDailyInsights, metaAdsAccountHealth, gmnAnalises, tarefas, diarios, equipe, alertas, metas] = await withTimeout(Promise.all([
+      const [clientes, leads, crmWebhookLogs, campanhas, relatorios, vendas, metaAdsDailyInsights, metaAdsAccountHealth, gmnAnalises, tarefas, diarios, equipe, equipeClientes, alertas, metas] = await withTimeout(Promise.all([
         clienteService.list({ order: 'nome_empresa', ascending: true }),
         leadCrmService.list(),
         safeCrmWebhookLogsList(),
@@ -246,10 +248,11 @@ async function loadAll() {
         tarefaService.list({ columns: '*, clientes(nome_empresa)' }),
         safeDiaryList(),
         equipeService.list({ order: 'nome', ascending: true }),
+        safeEquipeClientesList(),
         safeAlertasList(),
         safeList(() => metaClienteService.listAll()),
       ]), 12000, 'O Supabase demorou para carregar os dados. Mostrando o painel em modo vazio ate atualizar.');
-      Object.assign(state, { clientes, leads, crmWebhookLogs, campanhas, relatorios, vendas, metaAdsDailyInsights, metaAdsAccountHealth, gmnAnalises, tarefas, diarios, equipe, alertas, metas });
+      Object.assign(state, { clientes, leads, crmWebhookLogs, campanhas, relatorios, vendas, metaAdsDailyInsights, metaAdsAccountHealth, gmnAnalises, tarefas, diarios, equipe, equipeClientes, alertas, metas });
       updateAlertasBadge();
       setupCrmRealtime();
       return;
@@ -268,7 +271,8 @@ async function loadAll() {
       safeAlertasList(),
       safeList(() => metaClienteService.listAll()),
     ]), 12000, 'O Supabase demorou para carregar os dados. Mostrando o painel em modo vazio ate atualizar.');
-    Object.assign(state, { clientes, leads: [], crmWebhookLogs: [], campanhas: [], relatorios, vendas, metaAdsDailyInsights, metaAdsAccountHealth, gmnAnalises, tarefas, diarios, equipe: [], alertas, metas });
+    const scoped = scopeDataToVisibleClients({ clientes, relatorios, vendas, metaAdsDailyInsights, metaAdsAccountHealth, gmnAnalises, tarefas, diarios, alertas, metas });
+    Object.assign(state, { ...scoped, leads: [], crmWebhookLogs: [], campanhas: [], equipe: [], equipeClientes: [] });
     updateAlertasBadge();
     teardownCrmRealtime();
   } catch (error) {
@@ -284,6 +288,32 @@ async function safeList(loader) {
     if (['42P01', 'PGRST205'].includes(error.code)) return [];
     throw error;
   }
+}
+
+async function safeEquipeClientesList() {
+  try {
+    return await equipeClienteService.list();
+  } catch (error) {
+    if (['42P01', 'PGRST205'].includes(error?.code) || String(error?.message || '').includes('equipe_clientes')) return [];
+    throw error;
+  }
+}
+
+function scopeDataToVisibleClients(data) {
+  const visibleClientIds = new Set((data.clientes || []).map((cliente) => cliente.id));
+  const byClient = (row) => row?.cliente_id && visibleClientIds.has(row.cliente_id);
+  return {
+    ...data,
+    relatorios: (data.relatorios || []).filter(byClient),
+    vendas: (data.vendas || []).filter(byClient),
+    metaAdsDailyInsights: (data.metaAdsDailyInsights || []).filter(byClient),
+    metaAdsAccountHealth: (data.metaAdsAccountHealth || []).filter(byClient),
+    gmnAnalises: (data.gmnAnalises || []).filter(byClient),
+    tarefas: (data.tarefas || []).filter(byClient),
+    diarios: (data.diarios || []).filter(byClient),
+    alertas: (data.alertas || []).filter((row) => !row?.cliente_id || visibleClientIds.has(row.cliente_id)),
+    metas: (data.metas || []).filter(byClient),
+  };
 }
 
 async function safeAlertasList() {
@@ -3833,16 +3863,26 @@ function isImprovingAlert(alerta) {
 function renderEquipe() {
   return `
     ${pageHeader('Equipe', 'Responsaveis internos da operacao.', `<button class="secondary-button" data-action="export" data-entity="equipe"><i data-lucide="download"></i>CSV</button><button class="button" data-action="new" data-entity="equipe"><i data-lucide="plus"></i>Novo membro</button>`)}
-    ${renderTablePanel('equipe', ['Nome', 'Email', 'Cargo', 'Funcao', 'Status', ''], state.equipe.map((member) => `
+    ${renderTablePanel('equipe', ['Nome', 'Email', 'Cargo', 'Funcao', 'Clientes', 'Status', ''], state.equipe.map((member) => `
       <tr>
         <td><strong>${escapeHtml(member.nome)}</strong></td>
         <td>${escapeHtml(member.email || '-')}</td>
         <td>${escapeHtml(member.cargo || '-')}</td>
         <td>${escapeHtml(label(member.funcao || 'gestor_trafego'))}</td>
+        <td>${renderAssignedClientNames(member.id)}</td>
         <td>${statusBadge(member.status)}</td>
         <td class="row-actions">${actionButtons('equipe', member.id)}</td>
       </tr>`).join(''))}
   `;
+}
+
+function renderAssignedClientNames(equipeId) {
+  const names = state.equipeClientes
+    .filter((item) => item.equipe_id === equipeId)
+    .map((item) => getClienteName(item.cliente_id))
+    .filter(Boolean);
+  if (!names.length) return '<span class="muted">Nenhum cliente</span>';
+  return `<span class="muted">${escapeHtml(names.join(', '))}</span>`;
 }
 
 async function renderClienteDetail(id) {
@@ -4197,6 +4237,11 @@ function bindCrmDragAndDrop() {
 function openForm(entity, id = null, defaults = {}) {
   const current = id ? getEntityList(entity).find((item) => item.id === id) : {};
   const values = { ...defaults, ...current };
+  if (entity === 'equipe') {
+    values.cliente_ids = id
+      ? state.equipeClientes.filter((item) => item.equipe_id === id).map((item) => item.cliente_id)
+      : [];
+  }
   const schema = getFormSchema(entity);
   modalEyebrow.textContent = id ? 'Editar registro' : 'Novo registro';
   modalTitle.textContent = schema.title;
@@ -4225,6 +4270,24 @@ function renderField(field, value) {
     const customLabels = Object.fromEntries((field.customLabels || []).map((item) => [item.value, item.label]));
     return `<label class="${field.full ? 'full' : ''}">${field.label}<select ${common}><option value="">Selecione</option>${field.options.map((opt) => `<option value="${opt}" ${String(value ?? field.default ?? '') === opt ? 'selected' : ''}>${escapeHtml(customLabels[opt] || label(opt))}</option>`).join('')}</select></label>`;
   }
+  if (field.type === 'multiselect') {
+    const selected = new Set(Array.isArray(value) ? value : []);
+    const customLabels = Object.fromEntries((field.customLabels || []).map((item) => [item.value, item.label]));
+    return `
+      <div class="form-field ${field.full ? 'full' : ''}">
+        <span>${escapeHtml(field.label)}</span>
+        ${field.helper ? `<span class="field-helper">${escapeHtml(field.helper)}</span>` : ''}
+        <div class="multi-check-list">
+          ${field.options.map((opt) => `
+            <label class="multi-check-item">
+              <input type="checkbox" name="${field.name}" value="${escapeHtml(opt)}" ${selected.has(opt) ? 'checked' : ''}>
+              <span>${escapeHtml(customLabels[opt] || label(opt))}</span>
+            </label>
+          `).join('')}
+        </div>
+      </div>
+    `;
+  }
   if (field.type === 'textarea') return `<label class="full">${field.label}<textarea ${common}>${safeValue}</textarea></label>`;
   return `<label class="${field.full ? 'full' : ''}">${field.label}<input class="input" type="${field.type || 'text'}" value="${safeValue}" ${common}></label>`;
 }
@@ -4233,7 +4296,10 @@ async function handleSubmit(event, entity, id) {
   event.preventDefault();
   const formData = new FormData(event.target);
   const payload = Object.fromEntries(formData.entries());
+  const equipeClienteIds = entity === 'equipe' ? formData.getAll('cliente_ids') : [];
+  if (entity === 'equipe') delete payload.cliente_ids;
   getFormSchema(entity).fields.forEach((field) => {
+    if (field.type === 'multiselect') return;
     if (field.type === 'number') payload[field.name] = payload[field.name] === '' ? null : Number(payload[field.name]);
     if (field.name === 'revisao_verba_ok') payload[field.name] = payload[field.name] === 'true';
     if (entity === 'metas' && field.name === 'ativo') payload[field.name] = payload[field.name] === 'true';
@@ -4262,6 +4328,9 @@ async function handleSubmit(event, entity, id) {
       : await getService(entity)[id ? 'update' : 'create'](id || payload, payload);
     if (entity === 'clientes' && !id && saved?.id) {
       await createDefaultTasksForNewClient(saved);
+    }
+    if (entity === 'equipe' && saved?.id) {
+      await equipeClienteService.replaceForMember(saved.id, equipeClienteIds);
     }
     if (entity === 'crm' && id && ['respondeu', 'qualificado'].includes(payload.etapa) && previousLead?.etapa !== payload.etapa) {
       await sendCrmMetaEvent(id, previousLead?.etapa || null);
@@ -5358,6 +5427,7 @@ function getFormSchema(entity) {
         { name: 'senha', label: 'Senha de acesso', type: 'password' },
         { name: 'cargo', label: 'Cargo' },
         { name: 'funcao', label: 'Funcao', type: 'select', options: ['gestor_trafego', 'operacao', 'admin'], customLabels: [{ value: 'gestor_trafego', label: 'Gestor de trafego' }, { value: 'operacao', label: 'Operacao' }, { value: 'admin', label: 'Admin' }], default: 'gestor_trafego' },
+        { name: 'cliente_ids', label: 'Clientes permitidos', type: 'multiselect', options: clienteOptions.map((c) => c.value), customLabels: clienteOptions, full: true, helper: 'Marque as contas que este gestor pode visualizar.' },
         { name: 'status', label: 'Status', type: 'select', options: ['ativo', 'inativo'], default: 'ativo' },
       ],
     },
