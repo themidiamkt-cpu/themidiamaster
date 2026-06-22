@@ -112,12 +112,12 @@ const state = {
   whatsapp: getStoredWhatsAppConfig(),
 };
 
-const crmStages = ['lead_novo', 'contato_feito', 'respondeu', 'reuniao_marcada', 'proposta_enviada', 'fechado', 'perdido'];
+const crmStages = ['lead_novo', 'respondeu', 'qualificado', 'reuniao_marcada', 'proposta_enviada', 'fechado', 'perdido'];
 const crmActiveStages = crmStages.filter((stage) => !['fechado', 'perdido'].includes(stage));
 const defaultFollowupCadence = {
   lead_novo: [1, 3, 7],
-  contato_feito: [2, 4],
   respondeu: [1, 3],
+  qualificado: [2, 4],
   reuniao_marcada: [1, 2],
   proposta_enviada: [2, 3, 5],
 };
@@ -768,14 +768,16 @@ function renderDashboard() {
   const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
   const leadsMonth = state.relatorios.filter((r) => new Date(r.periodo_fim) >= monthStart).reduce((sum, r) => sum + Number(r.leads || 0), 0);
   const crmTotal = state.leads.length;
-  const crmContacted = state.leads.filter((lead) => ['contato_feito', 'respondeu', 'reuniao_marcada', 'proposta_enviada', 'fechado', 'perdido'].includes(lead.etapa)).length;
+  const crmResponded = state.leads.filter((lead) => ['respondeu', 'qualificado', 'reuniao_marcada', 'proposta_enviada', 'fechado', 'perdido'].includes(lead.etapa)).length;
+  const crmQualified = state.leads.filter((lead) => ['qualificado', 'reuniao_marcada', 'proposta_enviada', 'fechado'].includes(lead.etapa)).length;
   const crmMeetings = state.leads.filter((lead) => ['reuniao_marcada', 'proposta_enviada', 'fechado'].includes(lead.etapa)).length;
   const crmProposals = state.leads.filter((lead) => ['proposta_enviada', 'fechado'].includes(lead.etapa)).length;
   const crmClosed = state.leads.filter((lead) => lead.etapa === 'fechado').length;
   const crmLost = state.leads.filter((lead) => lead.etapa === 'perdido').length;
-  const contactRate = percent(crmContacted, crmTotal);
+  const responseRate = percent(crmResponded, crmTotal);
+  const qualifiedFromResponseRate = percent(crmQualified, crmResponded);
   const meetingRate = percent(crmMeetings, crmTotal);
-  const meetingFromContactRate = percent(crmMeetings, crmContacted);
+  const meetingFromQualifiedRate = percent(crmMeetings, crmQualified);
   const proposalRate = percent(crmProposals, crmMeetings);
   const closeRate = percent(crmClosed, crmTotal);
   const closeFromProposalRate = percent(crmClosed, crmProposals);
@@ -828,9 +830,11 @@ function renderDashboard() {
       </div>
       <div class="funnel-flow">
         ${funnelStageCard('Leads no funil', crmTotal, 'blue')}
-        ${funnelConnector(contactRate, 'lead > contato')}
-        ${funnelStageCard('Contato feito', crmContacted, 'blue')}
-        ${funnelConnector(meetingFromContactRate, 'contato > reuniao')}
+        ${funnelConnector(responseRate, 'lead > respondeu')}
+        ${funnelStageCard('Respondeu', crmResponded, 'blue')}
+        ${funnelConnector(qualifiedFromResponseRate, 'respondeu > qualificado')}
+        ${funnelStageCard('Qualificados', crmQualified, 'green')}
+        ${funnelConnector(meetingFromQualifiedRate, 'qualificado > reuniao')}
         ${funnelStageCard('Reunioes marcadas', crmMeetings, 'gold')}
         ${funnelConnector(proposalRate, 'reuniao > proposta')}
         ${funnelStageCard('Propostas enviadas', crmProposals, 'yellow')}
@@ -866,7 +870,8 @@ function renderDashboard() {
           ${areaSummary('Financeiro', `${money(monthlyRevenue)} em contratos`)}
           ${areaSummary('Funil comercial', `${crmTotal} leads > ${crmMeetings} reunioes > ${crmClosed} fechamentos`)}
           ${areaSummary('Conversao geral', closeRate)}
-          ${areaSummary('Contato feito', `${crmContacted} leads (${percent(crmContacted, crmTotal)})`)}
+          ${areaSummary('Responderam', `${crmResponded} leads (${percent(crmResponded, crmTotal)})`)}
+          ${areaSummary('Qualificados', `${crmQualified} leads (${percent(crmQualified, crmTotal)})`)}
           ${areaSummary('Perdidos', `${crmLost} leads`)}
           ${areaSummary('Tarefas', `${pendingTasks} abertas`)}
           ${areaSummary('Relatorios', `${state.relatorios.length} lancados`)}
@@ -3868,9 +3873,13 @@ async function handleSubmit(event, entity, id) {
       payload.tentativa = 0;
     }
   }
+  const previousLead = entity === 'crm' && id ? state.leads.find((lead) => lead.id === id) : null;
 
   try {
     await getService(entity)[id ? 'update' : 'create'](id || payload, payload);
+    if (entity === 'crm' && id && payload.etapa === 'qualificado' && previousLead?.etapa !== 'qualificado') {
+      await sendQualifiedLeadEvent(id, previousLead?.etapa || null);
+    }
     closeModal();
     await loadAll();
     render();
@@ -4339,15 +4348,41 @@ async function deleteChecklistItem(id, li, ii) {
 }
 
 async function moveLead(id, etapa) {
+  const previousLead = state.leads.find((item) => item.id === id);
   try {
     const patch = { aguardando_resposta_manual: false, tentativa: 0 };
     await leadCrmService.moveStage(id, etapa, patch);
+    if (etapa === 'qualificado' && previousLead?.etapa !== 'qualificado') {
+      await sendQualifiedLeadEvent(id, previousLead?.etapa || null);
+    }
     const idx = state.leads.findIndex((item) => item.id === id);
     if (idx >= 0) state.leads[idx] = { ...state.leads[idx], etapa, ...patch };
     render();
     toast(`Lead movido para ${label(etapa)}.`);
   } catch (error) {
     showError(error);
+  }
+}
+
+async function sendQualifiedLeadEvent(id, previousStage = null) {
+  try {
+    const { data, error } = await supabase.functions.invoke('send-qualified-lead-event', {
+      body: {
+        lead_id: id,
+        previous_stage: previousStage,
+      },
+    });
+    if (error) throw error;
+    if (data?.skipped) {
+      toast('Lead qualificado. Evento Meta ja tinha sido enviado.');
+      return data;
+    }
+    toast('Evento de lead qualificado enviado para Meta.');
+    return data;
+  } catch (error) {
+    console.warn('Falha ao enviar evento de lead qualificado para Meta.', error);
+    toast('Lead qualificado, mas o evento Meta falhou. Confira os secrets.', 'error');
+    return null;
   }
 }
 
