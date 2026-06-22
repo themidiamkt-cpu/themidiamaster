@@ -58,7 +58,7 @@ Deno.serve(async (req) => {
     if (phone) userData.ph = [await sha256(phone)];
 
     const eventPayload: Record<string, unknown> = {
-      event_name: 'Lead',
+      event_name: 'LeadSubmitted',
       event_time: now,
       event_id: eventId,
       action_source: 'business_messaging',
