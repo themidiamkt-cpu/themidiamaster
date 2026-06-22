@@ -1461,15 +1461,20 @@ function crmPipelineMetric(labelText, value) {
 function getTodayFollowups() {
   const today = isoDate(new Date());
   return state.leads
-    .filter((lead) => !['fechado', 'perdido'].includes(lead.etapa))
-    .filter((lead) => lead.etapa !== 'follow_up')
-    .filter((lead) => !lead.aguardando_resposta_manual)
-    .filter((lead) => lead.data_proximo_contato && String(lead.data_proximo_contato) <= today)
+    .filter((lead) => isLeadDueForManualFollowup(lead, today))
     .sort((a, b) => {
       const dateCompare = String(a.data_proximo_contato || '').localeCompare(String(b.data_proximo_contato || ''));
       if (dateCompare) return dateCompare;
       return String(a.nome_empresa || '').localeCompare(String(b.nome_empresa || ''));
     });
+}
+
+function isLeadDueForManualFollowup(lead, today = isoDate(new Date())) {
+  if (!lead) return false;
+  if (['fechado', 'perdido'].includes(lead.etapa)) return false;
+  if (lead.etapa === 'follow_up') return false;
+  if (lead.aguardando_resposta_manual) return false;
+  return Boolean(lead.data_proximo_contato && String(lead.data_proximo_contato) <= today);
 }
 
 function getFollowupCadence(lead) {
@@ -1611,7 +1616,7 @@ function buildFollowupResultPatch(lead, result, reason, now) {
   };
 }
 
-async function logCrmManualAction(lead, result, patch) {
+async function logCrmManualAction(lead, result, patch, extraPayload = {}) {
   if (state.crmWebhookLogsMissingTable) return;
   try {
     const log = await crmWebhookLogService.create({
@@ -1629,6 +1634,7 @@ async function logCrmManualAction(lead, result, patch) {
         resultado: result,
         patch,
         usuario: state.session?.user?.email || null,
+        ...extraPayload,
       },
     });
     state.crmWebhookLogs = [log, ...state.crmWebhookLogs].slice(0, 600);
@@ -1737,6 +1743,7 @@ async function sendConversationMessage(lead, input, sendBtn, thread) {
       }),
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    await markFollowupAsMessageSent(lead, text);
     sendBtn.classList.remove('sending');
   } catch (err) {
     console.error('[chat] Falha ao enviar mensagem:', err);
@@ -1746,6 +1753,26 @@ async function sendConversationMessage(lead, input, sendBtn, thread) {
     // Marca a bolha com erro
     const lastBubble = thread.lastElementChild?.querySelector('.conversation-bubble');
     if (lastBubble) lastBubble.classList.add('send-error');
+  }
+}
+
+async function markFollowupAsMessageSent(lead, messageText) {
+  if (!isLeadDueForManualFollowup(lead)) return;
+  const now = new Date().toISOString();
+  const patch = buildFollowupResultPatch(lead, 'sem_resposta', '', now);
+  const updated = await leadCrmService.update(lead.id, patch);
+  await logCrmManualAction(lead, 'mensagem_enviada_sem_resposta', patch, {
+    mensagem_enviada: messageText,
+    origem_acao: 'conversation_followup',
+  });
+  const index = state.leads.findIndex((item) => item.id === lead.id);
+  if (index >= 0) state.leads[index] = { ...state.leads[index], ...updated };
+  Object.assign(lead, updated);
+  if (state.view === 'crmFollowups') render();
+  if (patch.etapa === 'perdido') {
+    toast('Mensagem enviada. Lead movido para perdido por limite de tentativas.');
+  } else {
+    toast(`Mensagem enviada. Follow-up reagendado para ${date(patch.data_proximo_contato)}.`);
   }
 }
 
