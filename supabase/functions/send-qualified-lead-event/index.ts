@@ -62,6 +62,7 @@ Deno.serve(async (req) => {
       event_time: now,
       event_id: eventId,
       action_source: 'business_messaging',
+      messaging_channel: 'whatsapp',
       user_data: userData,
       custom_data: {
         lead_id: lead.id,
