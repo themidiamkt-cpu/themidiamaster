@@ -4607,7 +4607,7 @@ function normalizeTaskTitle(value) {
 }
 
 function getClientTaskOwner(cliente) {
-  return cliente?.responsavel || cliente?.responsavel_interno || cliente?.gestor || 'Gestor';
+  return cliente?.responsavel_interno || cliente?.responsavel || cliente?.gestor || 'Gestor';
 }
 
 // ── Task Detail (ClickUp-style) ─────────────────────────────────────────────
