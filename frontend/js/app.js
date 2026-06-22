@@ -38,6 +38,7 @@ const state = {
   view: getStoredView() || 'dashboard',
   taskDetailId: null,
   taskView: 'hoje',
+  taskDoneExpanded: {},
   clientes: [],
   leads: [],
   crmWebhookLogs: [],
@@ -3017,18 +3018,16 @@ function renderTarefas() {
   const openTasks = state.tarefas.filter((t) => !['concluida', 'cancelada'].includes(t.status)).length;
   const doneTasks = state.tarefas.filter((t) => t.status === 'concluida').length;
   const view = state.taskView || 'hoje';
-  const groups = [
-    ['pendente', 'Pendente'],
-    ['em_andamento', 'Em andamento'],
-    ['concluida', 'Concluidas'],
-    ['cancelada', 'Canceladas'],
-  ];
   const viewTabs = [
     { key: 'hoje', label: 'Hoje' },
     { key: 'semana', label: 'Esta semana' },
     { key: 'todas', label: 'Todas' },
   ];
-  const groupsHtml = groups.map(([status, title]) => renderTaskGroup(status, title, view)).join('');
+
+  // Agrupar por categoria
+  const cats = [...new Set(state.tarefas.map((t) => t.categoria || 'Geral'))].sort();
+  const categoriesHtml = cats.map((cat) => renderCategoryGroup(cat, view)).join('');
+
   return `
     <section class="task-page">
       ${pageHeader('Tarefas', `${overdue} vencidas.`, `<button class="secondary-button" data-action="export" data-entity="tarefas"><i data-lucide="download"></i>CSV</button><button class="button" data-action="new" data-entity="tarefas"><i data-lucide="plus"></i>Nova tarefa</button>`)}
@@ -3047,17 +3046,7 @@ function renderTarefas() {
             <span><i data-lucide="arrow-up-down"></i>Vencimento</span>
           </div>
         </div>
-        <div class="task-list-head">
-          <span>Nome</span>
-          <span>Responsavel</span>
-          <span>Vencimento</span>
-          <span>Prioridade</span>
-          <span></span>
-        </div>
-        ${groupsHtml}
-        <div class="task-new-status-row">
-          <button type="button" data-action="new" data-entity="tarefas"><i data-lucide="plus"></i>Novo status</button>
-        </div>
+        ${categoriesHtml}
       </section>
     </section>
   `;
@@ -3075,32 +3064,76 @@ function taskSummaryCard(title, value, icon, tone = 'neutral') {
   `;
 }
 
-function filterTasksForView(tasks, status, view) {
+function filterTasksForView(tasks, view) {
   if (view === 'todas') return tasks;
   const today = isoDate(new Date());
   const weekEnd = isoDate(new Date(Date.now() + 7 * 86400000));
-  if (['concluida', 'cancelada'].includes(status)) return tasks;
   if (view === 'hoje') return tasks.filter((t) => t.data_vencimento && t.data_vencimento <= today);
   if (view === 'semana') return tasks.filter((t) => t.data_vencimento && t.data_vencimento <= weekEnd);
   return tasks;
 }
 
-function renderTaskGroup(status, title, view = 'todas') {
-  const allTasks = state.tarefas.filter((t) => t.status === status);
-  const tasks = filterTasksForView(allTasks, status, view);
-  if (view !== 'todas' && ['concluida', 'cancelada'].includes(status) && tasks.length === 0) return '';
-  if (view !== 'todas' && !['concluida', 'cancelada'].includes(status) && tasks.length === 0) return '';
-  return `
-    <section class="task-group">
-      <button class="task-group-header" type="button">
-        <span class="task-status-dot status-${escapeHtml(status)}"></span>
-        <strong>${escapeHtml(title.toUpperCase())}</strong>
-        <em>${tasks.length}</em>
+function renderCategoryGroup(cat, view) {
+  const catTasks = state.tarefas.filter((t) => (t.categoria || 'Geral') === cat);
+  const active = filterTasksForView(catTasks.filter((t) => !['concluida', 'cancelada'].includes(t.status)), view);
+  const done = catTasks.filter((t) => t.status === 'concluida');
+  const cancelled = catTasks.filter((t) => t.status === 'cancelada');
+
+  if (view !== 'todas' && active.length === 0 && done.length === 0) return '';
+
+  const doneExpanded = !!(state.taskDoneExpanded && state.taskDoneExpanded[cat]);
+  const catKey = encodeURIComponent(cat);
+
+  // Active status groups
+  const statusGroups = [
+    ['pendente', 'Pendente'],
+    ['em_andamento', 'Em andamento'],
+  ];
+  const activeGroupsHtml = statusGroups.map(([status, label]) => {
+    const rows = active.filter((t) => t.status === status);
+    if (rows.length === 0 && view !== 'todas') return '';
+    return `
+      <div class="task-status-group">
+        <div class="task-status-group-head">
+          <span class="task-status-dot status-${escapeHtml(status)}"></span>
+          <strong>${escapeHtml(label.toUpperCase())}</strong>
+          <em>${rows.length}</em>
+        </div>
+        <div class="task-status-rows">
+          ${rows.length ? rows.map(renderTaskRow).join('') : `<div class="task-empty-row">Nenhuma tarefa aqui.</div>`}
+          <button class="task-add-row-btn" type="button" data-action="new" data-entity="tarefas"><i data-lucide="plus"></i>Adicionar Tarefa</button>
+        </div>
+      </div>`;
+  }).join('');
+
+  // Concluidas collapsible
+  const doneHtml = done.length ? `
+    <div class="task-done-toggle">
+      <button class="task-done-toggle-btn" type="button" data-action="toggle-done" data-cat="${catKey}">
+        <i data-lucide="${doneExpanded ? 'chevron-down' : 'chevron-right'}"></i>
+        <span class="task-status-dot status-concluida"></span>
+        <strong>CONCLUIDAS</strong>
+        <em>${done.length}</em>
       </button>
-      <div class="task-group-rows">
-        ${tasks.length ? tasks.map(renderTaskRow).join('') : `<div class="task-empty-row">Nenhuma tarefa aqui.</div>`}
-        <button class="task-add-row-btn" type="button" data-action="new" data-entity="tarefas"><i data-lucide="plus"></i>Adicionar Tarefa</button>
+      ${doneExpanded ? `<div class="task-status-rows">${done.map(renderTaskRow).join('')}</div>` : ''}
+    </div>` : '';
+
+  return `
+    <section class="task-category-group">
+      <div class="task-category-header">
+        <i data-lucide="list"></i>
+        <strong>${escapeHtml(cat)}</strong>
+        <em>${catTasks.length}</em>
       </div>
+      <div class="task-list-head">
+        <span>Nome</span>
+        <span>Responsavel</span>
+        <span>Vencimento</span>
+        <span>Prioridade</span>
+        <span></span>
+      </div>
+      ${activeGroupsHtml}
+      ${doneHtml}
     </section>
   `;
 }
@@ -3675,6 +3708,12 @@ function bindGlobalActions() {
     if (action === 'client-dashboard-origin') el.addEventListener('change', () => { state.dashboardClientesOrigem = el.value || 'all'; render(); });
     if (action === 'refresh-client-meta-costs') el.addEventListener('click', () => loadClientMetaCosts(true));
     if (action === 'task-view') el.addEventListener('click', () => { state.taskView = el.dataset.view; render(); });
+    if (action === 'toggle-done') el.addEventListener('click', () => {
+      const cat = decodeURIComponent(el.dataset.cat);
+      if (!state.taskDoneExpanded) state.taskDoneExpanded = {};
+      state.taskDoneExpanded[cat] = !state.taskDoneExpanded[cat];
+      render();
+    });
     if (action === 'toggle-task-status') el.addEventListener('click', () => toggleTaskStatus(el.dataset.id, el.dataset.status));
     if (action === 'open-task-detail') el.addEventListener('click', () => openTaskDetail(el.dataset.id));
     if (action === 'detail-cliente') el.addEventListener('click', () => { state.detailClienteId = el.dataset.id; state.detailTab = 'visao'; render(); });
@@ -4803,6 +4842,7 @@ function getFormSchema(entity) {
       fields: [
         clientSelect,
         { name: 'titulo', label: 'Titulo', required: true },
+        { name: 'categoria', label: 'Categoria', default: 'Geral' },
         { name: 'responsavel', label: 'Responsavel' },
         { name: 'prioridade', label: 'Prioridade', type: 'select', options: ['baixa', 'media', 'alta', 'urgente'], default: 'media' },
         { name: 'status', label: 'Status', type: 'select', options: ['pendente', 'em_andamento', 'concluida', 'cancelada'], default: 'pendente' },
