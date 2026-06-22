@@ -36,20 +36,21 @@ Deno.serve(async (req) => {
       .single();
     if (leadError) throw leadError;
     if (!lead) return json({ ok: false, error: 'Lead nao encontrado.' }, 404);
-    if (lead.etapa !== 'qualificado') return json({ ok: false, error: 'Lead ainda nao esta qualificado.' }, 409);
-    if (lead.meta_qualified_event_sent_at) {
+    const metaEvent = getMetaEventConfig(lead.etapa);
+    if (!metaEvent) return json({ ok: false, error: 'Etapa nao dispara evento Meta.' }, 409);
+    if (lead[metaEvent.sentAtColumn]) {
       return json({
         ok: true,
         skipped: true,
-        reason: 'Evento de lead qualificado ja enviado.',
-        event_id: lead.meta_qualified_event_id,
+        reason: `Evento ${metaEvent.eventName} ja enviado.`,
+        event_id: lead[metaEvent.idColumn],
       });
     }
 
     const latestLog = await getLatestLeadLog(supabase, lead);
     const payload = latestLog?.payload || {};
     const clickId = extractClickId(payload);
-    const eventId = `lead_qualified_${lead.id}`;
+    const eventId = `${metaEvent.eventName}_${lead.id}`;
     const now = Math.floor(Date.now() / 1000);
     const userData: Record<string, unknown> = {
       external_id: [await sha256(lead.id)],
@@ -58,7 +59,7 @@ Deno.serve(async (req) => {
     if (phone) userData.ph = [await sha256(phone)];
 
     const eventPayload: Record<string, unknown> = {
-      event_name: 'LeadSubmitted',
+      event_name: metaEvent.eventName,
       event_time: now,
       event_id: eventId,
       action_source: 'business_messaging',
@@ -66,7 +67,7 @@ Deno.serve(async (req) => {
       user_data: userData,
       custom_data: {
         lead_id: lead.id,
-        lead_stage: 'qualificado',
+        lead_stage: lead.etapa,
         lead_name: lead.nome_empresa || null,
         origin: lead.origem_lead || null,
         whatsapp: phone || null,
@@ -86,9 +87,9 @@ Deno.serve(async (req) => {
     const metaJson = await metaResponse.json().catch(() => ({}));
 
     await supabase.from('leads_crm').update({
-      meta_qualified_event_id: eventId,
-      meta_qualified_event_sent_at: metaResponse.ok ? new Date().toISOString() : null,
-      meta_qualified_event_response: {
+      [metaEvent.idColumn]: eventId,
+      [metaEvent.sentAtColumn]: metaResponse.ok ? new Date().toISOString() : null,
+      [metaEvent.responseColumn]: {
         ok: metaResponse.ok,
         status: metaResponse.status,
         response: metaJson,
@@ -99,7 +100,7 @@ Deno.serve(async (req) => {
 
     await supabase.from('crm_webhook_logs').insert({
       method: 'edge_function',
-      event: 'meta_lead_qualificado',
+      event: 'meta_crm_conversion',
       instance: 'the-midia-master',
       remote_jid: lead.whatsapp || null,
       from_me: true,
@@ -107,6 +108,8 @@ Deno.serve(async (req) => {
       lead_id: lead.id,
       payload: {
         event_id: eventId,
+        event_name: metaEvent.eventName,
+        lead_stage: lead.etapa,
         request: requestBody,
         response: metaJson,
         status: metaResponse.status,
@@ -185,6 +188,24 @@ function extractClickId(payload: Record<string, any>) {
 
 function firstFilled(...values: unknown[]) {
   return values.find((value) => String(value || '').trim()) as string | undefined;
+}
+
+function getMetaEventConfig(stage: string) {
+  const configs: Record<string, { eventName: string; idColumn: string; sentAtColumn: string; responseColumn: string }> = {
+    respondeu: {
+      eventName: 'LeadSubmitted',
+      idColumn: 'meta_lead_submitted_event_id',
+      sentAtColumn: 'meta_lead_submitted_event_sent_at',
+      responseColumn: 'meta_lead_submitted_event_response',
+    },
+    qualificado: {
+      eventName: 'QualifiedLead',
+      idColumn: 'meta_qualified_event_id',
+      sentAtColumn: 'meta_qualified_event_sent_at',
+      responseColumn: 'meta_qualified_event_response',
+    },
+  };
+  return configs[stage] || null;
 }
 
 function normalizePhone(value: unknown) {

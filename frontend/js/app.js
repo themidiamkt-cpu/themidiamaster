@@ -3940,8 +3940,8 @@ async function handleSubmit(event, entity, id) {
 
   try {
     await getService(entity)[id ? 'update' : 'create'](id || payload, payload);
-    if (entity === 'crm' && id && payload.etapa === 'qualificado' && previousLead?.etapa !== 'qualificado') {
-      await sendQualifiedLeadEvent(id, previousLead?.etapa || null);
+    if (entity === 'crm' && id && ['respondeu', 'qualificado'].includes(payload.etapa) && previousLead?.etapa !== payload.etapa) {
+      await sendCrmMetaEvent(id, previousLead?.etapa || null);
     }
     closeModal();
     await loadAll();
@@ -4415,8 +4415,8 @@ async function moveLead(id, etapa) {
   try {
     const patch = { aguardando_resposta_manual: false, tentativa: 0 };
     await leadCrmService.moveStage(id, etapa, patch);
-    if (etapa === 'qualificado' && previousLead?.etapa !== 'qualificado') {
-      await sendQualifiedLeadEvent(id, previousLead?.etapa || null);
+    if (['respondeu', 'qualificado'].includes(etapa) && previousLead?.etapa !== etapa) {
+      await sendCrmMetaEvent(id, previousLead?.etapa || null);
     }
     const idx = state.leads.findIndex((item) => item.id === id);
     if (idx >= 0) state.leads[idx] = { ...state.leads[idx], etapa, ...patch };
@@ -4427,7 +4427,7 @@ async function moveLead(id, etapa) {
   }
 }
 
-async function sendQualifiedLeadEvent(id, previousStage = null) {
+async function sendCrmMetaEvent(id, previousStage = null) {
   try {
     const { data, error } = await supabase.functions.invoke('send-qualified-lead-event', {
       body: {
@@ -4437,14 +4437,14 @@ async function sendQualifiedLeadEvent(id, previousStage = null) {
     });
     if (error) throw error;
     if (data?.skipped) {
-      toast('Lead qualificado. Evento Meta ja tinha sido enviado.');
+      toast('Evento Meta ja tinha sido enviado.');
       return data;
     }
-    toast('Evento de lead qualificado enviado para Meta.');
+    toast('Evento CRM enviado para Meta.');
     return data;
   } catch (error) {
-    console.warn('Falha ao enviar evento de lead qualificado para Meta.', error);
-    toast('Lead qualificado, mas o evento Meta falhou. Confira os secrets.', 'error');
+    console.warn('Falha ao enviar evento CRM para Meta.', error);
+    toast('Etapa atualizada, mas o evento Meta falhou. Confira os logs.', 'error');
     return null;
   }
 }
