@@ -779,10 +779,12 @@ function renderDashboard() {
   const proposalRate = percent(crmProposals, crmMeetings);
   const closeRate = percent(crmClosed, crmTotal);
   const closeFromProposalRate = percent(crmClosed, crmProposals);
-  const pendingTasks = state.tarefas.filter((t) => ['pendente', 'em_andamento'].includes(t.status)).length;
+  const pendingTaskItems = getPendingTasks();
+  const pendingTasks = pendingTaskItems.length;
   const overdueTasks = getOverdueTasks();
-  const staleReports = state.clientes.filter((cliente) => !state.relatorios.some((r) => r.cliente_id === cliente.id && daysSince(r.periodo_fim) <= 35)).length;
-  const followups = state.leads.filter((lead) => lead.data_proximo_contato).sort((a, b) => String(a.data_proximo_contato).localeCompare(String(b.data_proximo_contato))).slice(0, 5);
+  const staleReportClients = getStaleReportClients();
+  const staleReports = staleReportClients.length;
+  const followups = getDashboardFollowups();
 
   return `
     ${pageHeader('Dashboard geral da agencia', 'Indicadores reais consolidados a partir do Supabase.', `<button class="button" data-action="refresh"><i data-lucide="refresh-cw"></i>Atualizar</button>`)}
@@ -850,10 +852,10 @@ function renderDashboard() {
         <p>Tarefas, alertas e follow-ups comerciais</p>
       </div>
       <div class="stats-grid compact">
-        ${statCard('Tarefas pendentes', pendingTasks, 'list-checks', 'yellow')}
-        ${statCard('Tarefas vencidas', overdueTasks.length, 'alarm-clock', 'red')}
-        ${statCard('Sem relatorio atualizado', staleReports, 'file-warning', 'red')}
-        ${statCard('Follow-ups comerciais', followups.length, 'phone-forwarded', 'gold')}
+        ${statCard('Tarefas pendentes', pendingTasks, 'list-checks', 'yellow', operationCardAttrs('pendingTasks'))}
+        ${statCard('Tarefas vencidas', overdueTasks.length, 'alarm-clock', 'red', operationCardAttrs('overdueTasks'))}
+        ${statCard('Sem relatorio atualizado', staleReports, 'file-warning', 'red', operationCardAttrs('staleReports'))}
+        ${statCard('Follow-ups comerciais', followups.length, 'phone-forwarded', 'gold', operationCardAttrs('followups'))}
       </div>
     </section>
     <section class="grid-2">
@@ -876,6 +878,29 @@ function renderDashboard() {
       </div>
     </section>
   `;
+}
+
+function operationCardAttrs(kind) {
+  return `data-action="operation-detail" data-kind="${kind}" role="button" tabindex="0" aria-label="Ver detalhes"`;
+}
+
+function getPendingTasks() {
+  return state.tarefas
+    .filter((task) => ['pendente', 'em_andamento'].includes(task.status))
+    .sort((a, b) => String(a.data_vencimento || '9999-12-31').localeCompare(String(b.data_vencimento || '9999-12-31')));
+}
+
+function getStaleReportClients() {
+  return state.clientes
+    .filter((cliente) => !state.relatorios.some((relatorio) => relatorio.cliente_id === cliente.id && daysSince(relatorio.periodo_fim) <= 35))
+    .sort((a, b) => String(a.nome_empresa || '').localeCompare(String(b.nome_empresa || '')));
+}
+
+function getDashboardFollowups() {
+  return state.leads
+    .filter((lead) => lead.data_proximo_contato)
+    .filter((lead) => !['fechado', 'perdido'].includes(lead.etapa))
+    .sort((a, b) => String(a.data_proximo_contato || '').localeCompare(String(b.data_proximo_contato || '')));
 }
 
 function renderDashboardClientes() {
@@ -1213,6 +1238,132 @@ function renderAlertList(overdueTasks, followups, staleReports) {
   ].filter(Boolean);
   if (!items.length) return emptyState('Sem alertas criticos', 'Operacao sem pendencias principais agora.');
   return `<div class="table-wrap"><table><tbody>${items.map((item) => `<tr><td>${escapeHtml(item)}</td></tr>`).join('')}</tbody></table></div>`;
+}
+
+function openOperationDetail(kind) {
+  const configs = {
+    pendingTasks: {
+      title: 'Tarefas pendentes',
+      description: 'Tarefas abertas ou em andamento.',
+      heads: ['Tarefa', 'Cliente', 'Responsavel', 'Vencimento', 'Status', ''],
+      rows: getPendingTasks().map((task) => operationTaskRow(task)),
+      empty: ['Sem tarefas pendentes', 'Nenhuma tarefa aberta agora.'],
+    },
+    overdueTasks: {
+      title: 'Tarefas vencidas',
+      description: 'Tarefas abertas com vencimento anterior a hoje.',
+      heads: ['Tarefa', 'Cliente', 'Responsavel', 'Vencimento', 'Status', ''],
+      rows: getOverdueTasks().map((task) => operationTaskRow(task)),
+      empty: ['Sem tarefas vencidas', 'Tudo em dia por aqui.'],
+    },
+    staleReports: {
+      title: 'Sem relatorio atualizado',
+      description: 'Clientes sem relatorio nos ultimos 35 dias.',
+      heads: ['Cliente', 'Responsavel', 'Ultimo relatorio', 'Status', ''],
+      rows: getStaleReportClients().map((cliente) => operationClientRow(cliente)),
+      empty: ['Todos com relatorio recente', 'Nenhum cliente esta vencido nesse criterio.'],
+    },
+    followups: {
+      title: 'Follow-ups comerciais',
+      description: 'Leads com proximo contato registrado.',
+      heads: ['Lead', 'Etapa', 'Toque', 'Proximo contato', 'Responsavel', ''],
+      rows: getDashboardFollowups().map((lead) => operationFollowupRow(lead)),
+      empty: ['Sem follow-ups cadastrados', 'Nenhum lead ativo tem proximo contato definido.'],
+    },
+  };
+  const config = configs[kind];
+  if (!config) return;
+
+  modalEyebrow.textContent = 'Operacao';
+  modalTitle.textContent = config.title;
+  modalForm.onsubmit = null;
+  modalForm.innerHTML = `
+    <div class="operation-detail-modal">
+      <p class="muted">${escapeHtml(config.description)}</p>
+      ${config.rows.length ? `
+        <div class="table-wrap">
+          <table>
+            <thead><tr>${config.heads.map((head) => `<th>${escapeHtml(head)}</th>`).join('')}</tr></thead>
+            <tbody>${config.rows.join('')}</tbody>
+          </table>
+        </div>
+      ` : emptyState(config.empty[0], config.empty[1])}
+      <div class="form-actions">
+        <button type="button" class="secondary-button" data-modal-cancel>Fechar</button>
+      </div>
+    </div>
+  `;
+  modalBackdrop.hidden = false;
+  modalForm.querySelector('[data-modal-cancel]')?.addEventListener('click', closeModal);
+  modalForm.querySelectorAll('[data-operation-task]').forEach((button) => {
+    button.addEventListener('click', () => {
+      closeModal();
+      openTaskDetail(button.dataset.id);
+    });
+  });
+  modalForm.querySelectorAll('[data-operation-client]').forEach((button) => {
+    button.addEventListener('click', () => {
+      closeModal();
+      state.detailClienteId = button.dataset.id;
+      state.view = 'clientes';
+      persistView();
+      render();
+    });
+  });
+  modalForm.querySelectorAll('[data-operation-lead]').forEach((button) => {
+    button.addEventListener('click', () => {
+      closeModal();
+      openLeadConversation(button.dataset.id);
+    });
+  });
+  modalForm.querySelectorAll('[data-operation-view]').forEach((button) => {
+    button.addEventListener('click', () => {
+      closeModal();
+      navigate(button.dataset.view);
+    });
+  });
+  renderLucide();
+}
+
+function operationTaskRow(task) {
+  return `
+    <tr>
+      <td><strong>${escapeHtml(task.titulo || 'Tarefa sem titulo')}</strong>${task.descricao ? `<span class="muted">${escapeHtml(task.descricao)}</span>` : ''}</td>
+      <td>${escapeHtml(task.clientes?.nome_empresa || getClienteName(task.cliente_id) || '-')}</td>
+      <td>${escapeHtml(task.responsavel || '-')}</td>
+      <td>${date(task.data_vencimento)}</td>
+      <td>${statusBadge(task.status || 'pendente')}</td>
+      <td><button class="ghost-button" type="button" data-operation-task data-id="${task.id}"><i data-lucide="panel-right-open"></i>Abrir</button></td>
+    </tr>
+  `;
+}
+
+function operationClientRow(cliente) {
+  const lastReport = state.relatorios
+    .filter((relatorio) => relatorio.cliente_id === cliente.id)
+    .sort((a, b) => String(b.periodo_fim || '').localeCompare(String(a.periodo_fim || '')))[0];
+  return `
+    <tr>
+      <td><strong>${escapeHtml(cliente.nome_empresa || 'Cliente sem nome')}</strong><span class="muted">${escapeHtml(cliente.segmento || cliente.cidade || '')}</span></td>
+      <td>${escapeHtml(cliente.responsavel_interno || cliente.responsavel || '-')}</td>
+      <td>${lastReport ? date(lastReport.periodo_fim) : 'Nunca'}</td>
+      <td>${statusBadge(cliente.status || 'ativo')}</td>
+      <td><button class="ghost-button" type="button" data-operation-client data-id="${cliente.id}"><i data-lucide="panel-right-open"></i>Abrir</button></td>
+    </tr>
+  `;
+}
+
+function operationFollowupRow(lead) {
+  return `
+    <tr>
+      <td><strong>${escapeHtml(lead.nome_empresa || 'Lead sem nome')}</strong><span class="muted">${escapeHtml(formatLeadPhone(lead.whatsapp) || lead.origem_lead || '')}</span></td>
+      <td>${statusBadge(lead.etapa || 'lead_novo')}</td>
+      <td>Toque ${Number(lead.tentativa || 0) + 1}</td>
+      <td>${date(lead.data_proximo_contato)}</td>
+      <td>${escapeHtml(lead.responsavel || '-')}</td>
+      <td><button class="ghost-button" type="button" data-operation-lead data-id="${lead.id}"><i data-lucide="message-circle"></i>Conversa</button></td>
+    </tr>
+  `;
 }
 
 function renderClientes() {
@@ -3454,6 +3605,15 @@ function bindGlobalActions() {
     if (action === 'export') el.addEventListener('click', () => exportEntity(el.dataset.entity));
     if (action === 'print') el.addEventListener('click', () => window.print());
     if (action === 'refresh') el.addEventListener('click', async () => { await loadAll(); render(); toast('Dados atualizados.'); });
+    if (action === 'operation-detail') {
+      el.addEventListener('click', () => openOperationDetail(el.dataset.kind));
+      el.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          openOperationDetail(el.dataset.kind);
+        }
+      });
+    }
     if (action === 'client-dashboard-client') el.addEventListener('change', () => { state.dashboardClientesClienteId = el.value || 'all'; render(); });
     if (action === 'client-dashboard-origin') el.addEventListener('change', () => { state.dashboardClientesOrigem = el.value || 'all'; render(); });
     if (action === 'refresh-client-meta-costs') el.addEventListener('click', () => loadClientMetaCosts(true));

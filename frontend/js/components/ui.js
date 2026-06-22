@@ -86,9 +86,9 @@ export function pageHeader(title, subtitle, action = '') {
   `;
 }
 
-export function statCard(labelText, value, icon, tone = 'blue') {
+export function statCard(labelText, value, icon, tone = 'blue', attrs = '') {
   return `
-    <article class="stat-card tone-${tone}">
+    <article class="stat-card tone-${tone}" ${attrs}>
       <strong>${escapeHtml(value)}</strong>
       <span>${escapeHtml(labelText)}</span>
     </article>

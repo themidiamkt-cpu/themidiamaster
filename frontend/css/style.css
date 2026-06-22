@@ -257,6 +257,13 @@ h3 { font-size: 15px; }
   box-shadow: var(--shadow);
   border-color: #cbd5e1;
 }
+.stat-card[data-action] {
+  cursor: pointer;
+}
+.stat-card[data-action]:focus-visible {
+  outline: 3px solid rgba(20, 184, 166, 0.28);
+  outline-offset: 3px;
+}
 .stat-card strong {
   display: block;
   color: #0f172a;
