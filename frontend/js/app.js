@@ -3146,7 +3146,7 @@ function renderTaskRow(tarefa) {
   const clBadge = clTotal > 0
     ? `<span class="task-cl-badge${clDone === clTotal ? ' done' : ''}"><i data-lucide="list-checks"></i>${clDone}/${clTotal}</span>`
     : '';
-  const recurIcon = tarefa.recorrencia === 'semanal' && tarefa.recorrencia_ativa
+  const recurIcon = tarefa.recorrencia_ativa && tarefa.recorrencia !== 'nenhuma'
     ? `<span class="task-recur-icon" title="${escapeHtml(taskRecurrenceText(tarefa))}"><i data-lucide="repeat-2"></i></span>`
     : '';
   return `
@@ -3215,14 +3215,22 @@ function taskAssignee(name) {
 }
 
 function taskRecurringPill(tarefa) {
-  if (tarefa.recorrencia !== 'semanal' || !tarefa.recorrencia_ativa) return '';
+  if (!tarefa.recorrencia_ativa || tarefa.recorrencia === 'nenhuma') return '';
+  if (tarefa.recorrencia === 'diaria') {
+    return '<span class="task-recurring-pill"><i data-lucide="repeat-2"></i>diaria</span>';
+  }
+  if (tarefa.recorrencia === 'mensal_primeiro_dia_util') {
+    return '<span class="task-recurring-pill"><i data-lucide="repeat-2"></i>1o dia util</span>';
+  }
   const day = Number.isInteger(Number(tarefa.recorrencia_dia_semana)) ? Number(tarefa.recorrencia_dia_semana) : null;
   const dayLabel = day === null ? 'semanal' : weekDayLabels[day];
   return `<span class="task-recurring-pill"><i data-lucide="repeat-2"></i>${escapeHtml(dayLabel)}</span>`;
 }
 
 function taskRecurrenceText(tarefa) {
-  if (tarefa.recorrencia !== 'semanal' || !tarefa.recorrencia_ativa) return 'Sem recorrencia';
+  if (!tarefa.recorrencia_ativa || tarefa.recorrencia === 'nenhuma') return 'Sem recorrencia';
+  if (tarefa.recorrencia === 'diaria') return 'Todos os dias';
+  if (tarefa.recorrencia === 'mensal_primeiro_dia_util') return 'Todo primeiro dia util do mes';
   const day = Number.isInteger(Number(tarefa.recorrencia_dia_semana)) ? Number(tarefa.recorrencia_dia_semana) : null;
   return `Toda ${day === null ? 'semana' : weekDayLabels[day].toLowerCase()}`;
 }
@@ -3978,7 +3986,10 @@ async function handleSubmit(event, entity, id) {
   const previousLead = entity === 'crm' && id ? state.leads.find((lead) => lead.id === id) : null;
 
   try {
-    await getService(entity)[id ? 'update' : 'create'](id || payload, payload);
+    const saved = await getService(entity)[id ? 'update' : 'create'](id || payload, payload);
+    if (entity === 'clientes' && !id && saved?.id) {
+      await createDefaultTasksForNewClient(saved);
+    }
     if (entity === 'crm' && id && ['respondeu', 'qualificado'].includes(payload.etapa) && previousLead?.etapa !== payload.etapa) {
       await sendCrmMetaEvent(id, previousLead?.etapa || null);
     }
@@ -4012,9 +4023,12 @@ async function toggleTaskStatus(id, currentStatus) {
     await tarefaService.update(id, patch);
     const index = state.tarefas.findIndex((tarefa) => tarefa.id === id);
     if (index >= 0) state.tarefas[index] = { ...state.tarefas[index], ...patch };
+    if (nextStatus === 'concluida' && !rescheduled) {
+      await handleTaskAutomationAfterCompletion({ ...tarefa, ...patch });
+    }
     render();
     if (rescheduled) {
-      toast(`Tarefa semanal reagendada para ${date(patch.data_vencimento)}.`);
+      toast(`Tarefa recorrente reagendada para ${date(patch.data_vencimento)}.`);
     } else {
       toast(nextStatus === 'concluida' ? 'Tarefa concluida.' : 'Tarefa reaberta.');
     }
@@ -4024,13 +4038,16 @@ async function toggleTaskStatus(id, currentStatus) {
 }
 
 function buildTaskStatusPatch(tarefa, nextStatus) {
-  const rescheduled = nextStatus === 'concluida' && tarefa?.recorrencia === 'semanal' && tarefa?.recorrencia_ativa;
+  const nextRecurringDate = nextStatus === 'concluida' && tarefa?.recorrencia_ativa
+    ? getNextRecurringTaskDate(tarefa)
+    : null;
+  const rescheduled = Boolean(nextRecurringDate);
   if (rescheduled) {
     return {
       rescheduled,
       patch: {
         status: 'pendente',
-        data_vencimento: getNextWeeklyTaskDate(tarefa.recorrencia_dia_semana, tarefa.data_vencimento),
+        data_vencimento: nextRecurringDate,
         concluida_em: null,
       },
     };
@@ -4047,14 +4064,28 @@ function buildTaskStatusPatch(tarefa, nextStatus) {
 function normalizeTaskPayload(payload) {
   const recurrence = payload.recorrencia || 'nenhuma';
   payload.recorrencia = recurrence;
-  payload.recorrencia_ativa = recurrence === 'semanal';
+  payload.recorrencia_ativa = recurrence !== 'nenhuma';
   if (recurrence === 'semanal') {
     const fallbackDay = payload.data_vencimento ? new Date(`${payload.data_vencimento}T00:00:00`).getDay() : 1;
     payload.recorrencia_dia_semana = payload.recorrencia_dia_semana === null ? fallbackDay : Number(payload.recorrencia_dia_semana);
     if (!payload.data_vencimento) payload.data_vencimento = getNextWeeklyTaskDate(payload.recorrencia_dia_semana);
+  } else if (recurrence === 'diaria') {
+    payload.recorrencia_dia_semana = null;
+    if (!payload.data_vencimento) payload.data_vencimento = addDaysToIsoDate(isoDate(new Date()), 1);
+  } else if (recurrence === 'mensal_primeiro_dia_util') {
+    payload.recorrencia_dia_semana = null;
+    if (!payload.data_vencimento) payload.data_vencimento = getUpcomingFirstBusinessDay();
   } else {
     payload.recorrencia_dia_semana = null;
   }
+}
+
+function getNextRecurringTaskDate(tarefa) {
+  if (!tarefa?.recorrencia_ativa || tarefa.recorrencia === 'nenhuma') return null;
+  if (tarefa.recorrencia === 'semanal') return getNextWeeklyTaskDate(tarefa.recorrencia_dia_semana, tarefa.data_vencimento);
+  if (tarefa.recorrencia === 'diaria') return addDaysToIsoDate(tarefa.data_vencimento || isoDate(new Date()), 1);
+  if (tarefa.recorrencia === 'mensal_primeiro_dia_util') return getNextMonthlyFirstBusinessDay(tarefa.data_vencimento);
+  return null;
 }
 
 function getNextWeeklyTaskDate(dayOfWeek, fromDate) {
@@ -4066,6 +4097,166 @@ function getNextWeeklyTaskDate(dayOfWeek, fromDate) {
   const daysUntilNext = (targetDay - base.getDay() + 7) % 7 || 7;
   base.setDate(base.getDate() + daysUntilNext);
   return isoDate(base);
+}
+
+function getUpcomingFirstBusinessDay(referenceDate = new Date()) {
+  const today = new Date(referenceDate);
+  today.setHours(0, 0, 0, 0);
+  let candidate = getFirstBusinessDay(today.getFullYear(), today.getMonth());
+  if (candidate < today) candidate = getFirstBusinessDay(today.getFullYear(), today.getMonth() + 1);
+  return isoDate(candidate);
+}
+
+function getNextMonthlyFirstBusinessDay(fromDate) {
+  const base = fromDate ? new Date(`${fromDate}T00:00:00`) : new Date();
+  return isoDate(getFirstBusinessDay(base.getFullYear(), base.getMonth() + 1));
+}
+
+function getFirstBusinessDay(year, monthIndex) {
+  const dateValue = new Date(year, monthIndex, 1);
+  while ([0, 6].includes(dateValue.getDay())) {
+    dateValue.setDate(dateValue.getDate() + 1);
+  }
+  return dateValue;
+}
+
+async function createDefaultTasksForNewClient(cliente) {
+  if (!cliente?.id) return;
+  const dueDate = addDaysToIsoDate(isoDate(new Date()), 1);
+  await Promise.all([
+    createOnboardingStageTask(cliente, 1, dueDate),
+    createOnboardingStageTask(cliente, 2, dueDate),
+  ]);
+}
+
+async function handleTaskAutomationAfterCompletion(tarefa) {
+  const stage = getOnboardingStageNumber(tarefa);
+  if (!stage || !tarefa?.cliente_id) return;
+  const cliente = await getTaskCliente(tarefa);
+  if (!cliente?.id) return;
+  const dueDate = addDaysToIsoDate(isoDate(new Date()), 1);
+  if (stage >= 2 && stage < 7) {
+    await createOnboardingStageTask(cliente, stage + 1, dueDate);
+  }
+  if (stage === 7) {
+    await createPaidTrafficTasks(cliente);
+  }
+}
+
+function getOnboardingStageNumber(tarefa) {
+  const match = String(tarefa?.titulo || '').trim().match(/^Onboarding - Etapa ([1-7])$/i);
+  return match ? Number(match[1]) : null;
+}
+
+async function getTaskCliente(tarefa) {
+  const localCliente = state.clientes.find((cliente) => cliente.id === tarefa.cliente_id);
+  if (localCliente) return localCliente;
+  try {
+    return await clienteService.getById(tarefa.cliente_id);
+  } catch (error) {
+    console.warn('Nao foi possivel carregar cliente da tarefa.', error);
+    return null;
+  }
+}
+
+async function createOnboardingStageTask(cliente, stage, dueDate) {
+  return createTaskIfMissing({
+    cliente_id: cliente.id,
+    titulo: `Onboarding - Etapa ${stage}`,
+    categoria: 'Onboarding',
+    responsavel: getClientTaskOwner(cliente),
+    prioridade: 'alta',
+    status: 'pendente',
+    data_inicio: isoDate(new Date()),
+    data_vencimento: dueDate,
+    recorrencia: 'nenhuma',
+    recorrencia_ativa: false,
+    recorrencia_dia_semana: null,
+    descricao: `Etapa ${stage} do onboarding do cliente.`,
+  });
+}
+
+async function createPaidTrafficTasks(cliente) {
+  const owner = getClientTaskOwner(cliente);
+  const templates = [
+    {
+      titulo: 'Trafego pago - Otimizacao mensal',
+      recorrencia: 'mensal_primeiro_dia_util',
+      data_vencimento: getUpcomingFirstBusinessDay(),
+    },
+    {
+      titulo: 'Trafego pago - Criativos',
+      recorrencia: 'semanal',
+      recorrencia_dia_semana: 2,
+      data_vencimento: getNextWeeklyTaskDate(2),
+    },
+    {
+      titulo: 'Trafego pago - Funil',
+      recorrencia: 'semanal',
+      recorrencia_dia_semana: 3,
+      data_vencimento: getNextWeeklyTaskDate(3),
+    },
+    {
+      titulo: 'Trafego pago - Revisao',
+      recorrencia: 'diaria',
+      data_vencimento: addDaysToIsoDate(isoDate(new Date()), 1),
+    },
+    {
+      titulo: 'Trafego pago - Otimizacao semanal',
+      recorrencia: 'semanal',
+      recorrencia_dia_semana: 2,
+      data_vencimento: getNextWeeklyTaskDate(2),
+    },
+    {
+      titulo: 'Trafego pago - Relatorio',
+      recorrencia: 'semanal',
+      recorrencia_dia_semana: 1,
+      data_vencimento: getNextWeeklyTaskDate(1),
+      responsavel: owner,
+    },
+    {
+      titulo: 'Trafego pago - Avaliar cliente por 1 dia',
+      recorrencia: 'mensal_primeiro_dia_util',
+      data_vencimento: getUpcomingFirstBusinessDay(),
+      responsavel: owner,
+    },
+  ];
+
+  await Promise.all(templates.map((template) => createTaskIfMissing({
+    cliente_id: cliente.id,
+    titulo: template.titulo,
+    categoria: 'Trafego pago',
+    responsavel: template.responsavel || owner,
+    prioridade: 'media',
+    status: 'pendente',
+    data_inicio: isoDate(new Date()),
+    data_vencimento: template.data_vencimento,
+    recorrencia: template.recorrencia,
+    recorrencia_ativa: true,
+    recorrencia_dia_semana: template.recorrencia_dia_semana ?? null,
+    descricao: 'Rotina automatica criada apos o onboarding.',
+  })));
+}
+
+async function createTaskIfMissing(payload) {
+  const normalizedTitle = normalizeTaskTitle(payload.titulo);
+  const exists = state.tarefas.some((tarefa) => (
+    tarefa.cliente_id === payload.cliente_id
+    && normalizeTaskTitle(tarefa.titulo) === normalizedTitle
+    && tarefa.status !== 'cancelada'
+  ));
+  if (exists) return null;
+  const created = await tarefaService.create(payload);
+  if (created?.id) state.tarefas.push(created);
+  return created;
+}
+
+function normalizeTaskTitle(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function getClientTaskOwner(cliente) {
+  return cliente?.responsavel || cliente?.responsavel_interno || cliente?.gestor || 'Gestor';
 }
 
 // ── Task Detail (ClickUp-style) ─────────────────────────────────────────────
@@ -4505,6 +4696,7 @@ async function convertLead(id) {
       valor_mensal: lead.investimento_disponivel,
       observacoes: lead.observacoes,
     });
+    await createDefaultTasksForNewClient(cliente);
     await loadAll();
     state.detailClienteId = cliente.id;
     state.detailTab = 'onboarding';
@@ -4848,7 +5040,7 @@ function getFormSchema(entity) {
         { name: 'status', label: 'Status', type: 'select', options: ['pendente', 'em_andamento', 'concluida', 'cancelada'], default: 'pendente' },
         { name: 'data_inicio', label: 'Data de inicio', type: 'date' },
         { name: 'data_vencimento', label: 'Data de vencimento', type: 'date' },
-        { name: 'recorrencia', label: 'Recorrencia', type: 'select', options: ['nenhuma', 'semanal'], customLabels: [{ value: 'nenhuma', label: 'Nao repetir' }, { value: 'semanal', label: 'Semanal' }], default: 'nenhuma' },
+        { name: 'recorrencia', label: 'Recorrencia', type: 'select', options: ['nenhuma', 'diaria', 'semanal', 'mensal_primeiro_dia_util'], customLabels: [{ value: 'nenhuma', label: 'Nao repetir' }, { value: 'diaria', label: 'Diaria' }, { value: 'semanal', label: 'Semanal' }, { value: 'mensal_primeiro_dia_util', label: 'Mensal, primeiro dia util' }], default: 'nenhuma' },
         { name: 'recorrencia_dia_semana', label: 'Dia da semana (se recorrente)', type: 'select', options: ['1', '2', '3', '4', '5', '6', '0'], customLabels: [{ value: '1', label: 'Segunda' }, { value: '2', label: 'Terca' }, { value: '3', label: 'Quarta' }, { value: '4', label: 'Quinta' }, { value: '5', label: 'Sexta' }, { value: '6', label: 'Sabado' }, { value: '0', label: 'Domingo' }], default: '1' },
         { name: 'descricao', label: 'Descricao', type: 'textarea' },
       ],
