@@ -37,6 +37,7 @@ let googlePlacesMap = null;
 const state = {
   view: getStoredView() || 'dashboard',
   taskDetailId: null,
+  taskView: 'hoje',
   clientes: [],
   leads: [],
   crmWebhookLogs: [],
@@ -3013,45 +3014,50 @@ function formatGbpPoint(point) {
 
 function renderTarefas() {
   const overdue = getOverdueTasks().length;
-  const openTasks = state.tarefas.filter((tarefa) => !['concluida', 'cancelada'].includes(tarefa.status)).length;
-  const doneTasks = state.tarefas.filter((tarefa) => tarefa.status === 'concluida').length;
+  const openTasks = state.tarefas.filter((t) => !['concluida', 'cancelada'].includes(t.status)).length;
+  const doneTasks = state.tarefas.filter((t) => t.status === 'concluida').length;
+  const view = state.taskView || 'hoje';
   const groups = [
-    ['pendente', 'Pendentes'],
+    ['pendente', 'Pendente'],
     ['em_andamento', 'Em andamento'],
     ['concluida', 'Concluidas'],
     ['cancelada', 'Canceladas'],
   ];
+  const viewTabs = [
+    { key: 'hoje', label: 'Hoje' },
+    { key: 'semana', label: 'Esta semana' },
+    { key: 'todas', label: 'Todas' },
+  ];
+  const groupsHtml = groups.map(([status, title]) => renderTaskGroup(status, title, view)).join('');
   return `
     <section class="task-page">
-      ${pageHeader('Tarefas', `${overdue} tarefas vencidas no momento.`, `<button class="secondary-button" data-action="export" data-entity="tarefas"><i data-lucide="download"></i>CSV</button><button class="button" data-action="new" data-entity="tarefas"><i data-lucide="plus"></i>Nova tarefa</button>`)}
+      ${pageHeader('Tarefas', `${overdue} vencidas.`, `<button class="secondary-button" data-action="export" data-entity="tarefas"><i data-lucide="download"></i>CSV</button><button class="button" data-action="new" data-entity="tarefas"><i data-lucide="plus"></i>Nova tarefa</button>`)}
       <div class="task-summary-grid">
         ${taskSummaryCard('Abertas', openTasks, 'circle-dot', 'blue')}
         ${taskSummaryCard('Vencidas', overdue, 'calendar-alert', overdue ? 'red' : 'green')}
         ${taskSummaryCard('Concluidas', doneTasks, 'badge-check', 'green')}
         ${taskSummaryCard('Total', state.tarefas.length, 'list-checks', 'neutral')}
       </div>
-
       <section class="task-board-panel">
         <div class="task-toolbar">
           <div class="task-view-tabs">
-            <button class="active" type="button"><i data-lucide="list"></i>Lista</button>
-            <button type="button"><i data-lucide="columns-3"></i>Board</button>
-            <button type="button"><i data-lucide="calendar-days"></i>Calendario</button>
+            ${viewTabs.map((t) => `<button type="button" class="${view === t.key ? 'active' : ''}" data-action="task-view" data-view="${t.key}">${t.label}</button>`).join('')}
           </div>
           <div class="task-toolbar-actions">
-            <span><i data-lucide="filter"></i>Todos os responsaveis</span>
             <span><i data-lucide="arrow-up-down"></i>Vencimento</span>
           </div>
         </div>
         <div class="task-list-head">
-          <span>Tarefa</span>
-          <span>Cliente</span>
-          <span>Prioridade</span>
+          <span>Nome</span>
           <span>Responsavel</span>
           <span>Vencimento</span>
+          <span>Prioridade</span>
           <span></span>
         </div>
-        ${groups.map(([status, title]) => renderTaskGroup(status, title)).join('')}
+        ${groupsHtml}
+        <div class="task-new-status-row">
+          <button type="button" data-action="new" data-entity="tarefas"><i data-lucide="plus"></i>Novo status</button>
+        </div>
       </section>
     </section>
   `;
@@ -3069,17 +3075,31 @@ function taskSummaryCard(title, value, icon, tone = 'neutral') {
   `;
 }
 
-function renderTaskGroup(status, title) {
-  const tasks = state.tarefas.filter((tarefa) => tarefa.status === status);
+function filterTasksForView(tasks, status, view) {
+  if (view === 'todas') return tasks;
+  const today = isoDate(new Date());
+  const weekEnd = isoDate(new Date(Date.now() + 7 * 86400000));
+  if (['concluida', 'cancelada'].includes(status)) return tasks;
+  if (view === 'hoje') return tasks.filter((t) => t.data_vencimento && t.data_vencimento <= today);
+  if (view === 'semana') return tasks.filter((t) => t.data_vencimento && t.data_vencimento <= weekEnd);
+  return tasks;
+}
+
+function renderTaskGroup(status, title, view = 'todas') {
+  const allTasks = state.tarefas.filter((t) => t.status === status);
+  const tasks = filterTasksForView(allTasks, status, view);
+  if (view !== 'todas' && ['concluida', 'cancelada'].includes(status) && tasks.length === 0) return '';
+  if (view !== 'todas' && !['concluida', 'cancelada'].includes(status) && tasks.length === 0) return '';
   return `
     <section class="task-group">
       <button class="task-group-header" type="button">
         <span class="task-status-dot status-${escapeHtml(status)}"></span>
-        <strong>${escapeHtml(title)}</strong>
+        <strong>${escapeHtml(title.toUpperCase())}</strong>
         <em>${tasks.length}</em>
       </button>
       <div class="task-group-rows">
         ${tasks.length ? tasks.map(renderTaskRow).join('') : `<div class="task-empty-row">Nenhuma tarefa aqui.</div>`}
+        <button class="task-add-row-btn" type="button" data-action="new" data-entity="tarefas"><i data-lucide="plus"></i>Adicionar Tarefa</button>
       </div>
     </section>
   `;
@@ -3087,35 +3107,67 @@ function renderTaskGroup(status, title) {
 
 function renderTaskRow(tarefa) {
   const isDone = tarefa.status === 'concluida';
-  const cliente = tarefa.clientes?.nome_empresa || getClienteName(tarefa.cliente_id) || '-';
-  const assignee = tarefa.responsavel || '-';
   const lists = tarefa.checklists || [];
   const clTotal = lists.reduce((s, l) => s + (l.items?.length || 0), 0);
-  const clDone  = lists.reduce((s, l) => s + (l.items?.filter(i => i.done).length || 0), 0);
-  const clPill  = clTotal > 0
-    ? `<span class="task-checklist-pill${clDone === clTotal ? ' is-complete' : ''}"><i data-lucide="${clDone === clTotal ? 'check-circle-2' : 'list-checks'}"></i>${clDone}/${clTotal}</span>`
+  const clDone  = lists.reduce((s, l) => s + (l.items?.filter((i) => i.done).length || 0), 0);
+  const clBadge = clTotal > 0
+    ? `<span class="task-cl-badge${clDone === clTotal ? ' done' : ''}"><i data-lucide="list-checks"></i>${clDone}/${clTotal}</span>`
     : '';
-  const recurringPill = taskRecurringPill(tarefa);
+  const recurIcon = tarefa.recorrencia === 'semanal' && tarefa.recorrencia_ativa
+    ? `<span class="task-recur-icon" title="${escapeHtml(taskRecurrenceText(tarefa))}"><i data-lucide="repeat-2"></i></span>`
+    : '';
   return `
     <article class="task-row ${isDone ? 'is-done' : ''}" data-task-id="${tarefa.id}">
       <div class="task-title-cell">
-        <button class="task-check ${isDone ? 'checked' : ''}" data-action="toggle-task-status" data-id="${tarefa.id}" data-status="${tarefa.status}" aria-label="Alternar status"><i data-lucide="${isDone ? 'check' : 'circle'}"></i></button>
-        <div style="min-width:0">
+        <button class="task-check ${isDone ? 'checked' : ''}" data-action="toggle-task-status" data-id="${tarefa.id}" data-status="${tarefa.status}" aria-label="Alternar status">
+          <i data-lucide="${isDone ? 'check-circle-2' : 'circle'}"></i>
+        </button>
+        <div class="task-title-wrap">
           <button class="task-title-link" data-action="open-task-detail" data-id="${tarefa.id}">${escapeHtml(tarefa.titulo)}</button>
-          ${(tarefa.descricao || clPill || recurringPill) ? `<div class="task-row-sub">
+          ${(tarefa.descricao || clBadge || recurIcon) ? `<div class="task-row-sub">
             ${tarefa.descricao ? `<span class="task-row-desc">${escapeHtml(tarefa.descricao)}</span>` : ''}
-            ${clPill}
-            ${recurringPill}
+            ${clBadge}${recurIcon}
           </div>` : ''}
         </div>
       </div>
-      <div><span class="task-client-pill">${escapeHtml(cliente)}</span></div>
-      <div>${taskPriorityPill(tarefa.prioridade)}</div>
-      <div>${taskAssignee(assignee)}</div>
-      <div>${taskDuePill(tarefa.data_vencimento, tarefa.status)}</div>
+      <div class="task-cell-assignee">${taskAssigneeBubble(tarefa.responsavel)}</div>
+      <div class="task-cell-due">${taskDueDateCell(tarefa.data_vencimento, tarefa.status)}</div>
+      <div class="task-cell-priority">${taskPriorityFlag(tarefa.prioridade)}</div>
       <div class="task-row-actions">${actionButtons('tarefas', tarefa.id)}</div>
     </article>
   `;
+}
+
+function taskAssigneeBubble(name) {
+  if (!name || name === '-') return '<span class="task-assignee-empty">-</span>';
+  const initials = String(name).split(/\s+/).filter(Boolean).slice(0, 2).map((p) => p[0]).join('').toUpperCase();
+  const colors = ['#7c3aed', '#2563eb', '#059669', '#d97706', '#dc2626', '#0891b2'];
+  const idx = String(name).split('').reduce((a, c) => a + c.charCodeAt(0), 0) % colors.length;
+  return `<span class="task-assignee-bubble" style="background:${colors[idx]}" title="${escapeHtml(name)}">${escapeHtml(initials)}</span>`;
+}
+
+function taskDueDateCell(value, status) {
+  if (!value) return '<span class="task-due-empty">-</span>';
+  const now = new Date(); now.setHours(0, 0, 0, 0);
+  const due = new Date(`${value}T00:00:00`);
+  const diff = Math.round((due - now) / 86400000);
+  const isActive = !['concluida', 'cancelada'].includes(status);
+  const overdue = diff < 0 && isActive;
+  const soon = diff >= 0 && diff <= 1 && isActive;
+  let lbl;
+  if (diff < -1) lbl = `${Math.abs(diff)}d atraso`;
+  else if (diff === -1) lbl = 'Ontem';
+  else if (diff === 0) lbl = 'Hoje';
+  else if (diff === 1) lbl = 'Amanha';
+  else if (diff < 7) { const days = ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sab']; lbl = days[due.getDay()]; }
+  else lbl = date(value);
+  return `<span class="task-due-cell${overdue ? ' overdue' : soon ? ' soon' : ''}"><i data-lucide="refresh-cw" style="width:11px;height:11px;opacity:.5"></i>${escapeHtml(lbl)}</span>`;
+}
+
+function taskPriorityFlag(priority) {
+  const map = { urgente: { color: '#ef4444', label: 'Urgente' }, alta: { color: '#f59e0b', label: 'Alta' }, media: { color: '#94a3b8', label: 'Media' }, baixa: { color: '#cbd5e1', label: 'Baixa' } };
+  const p = map[priority || 'media'] || map.media;
+  return `<span class="task-priority-flag" style="color:${p.color}"><svg width="11" height="13" viewBox="0 0 11 13" fill="${p.color}" xmlns="http://www.w3.org/2000/svg"><rect width="1.5" height="13" rx=".75"/><path d="M1.5 1h9L7 5l3.5 4h-9V1z"/></svg>${escapeHtml(p.label)}</span>`;
 }
 
 function taskPriorityPill(priority) {
@@ -3622,6 +3674,7 @@ function bindGlobalActions() {
     if (action === 'client-dashboard-client') el.addEventListener('change', () => { state.dashboardClientesClienteId = el.value || 'all'; render(); });
     if (action === 'client-dashboard-origin') el.addEventListener('change', () => { state.dashboardClientesOrigem = el.value || 'all'; render(); });
     if (action === 'refresh-client-meta-costs') el.addEventListener('click', () => loadClientMetaCosts(true));
+    if (action === 'task-view') el.addEventListener('click', () => { state.taskView = el.dataset.view; render(); });
     if (action === 'toggle-task-status') el.addEventListener('click', () => toggleTaskStatus(el.dataset.id, el.dataset.status));
     if (action === 'open-task-detail') el.addEventListener('click', () => openTaskDetail(el.dataset.id));
     if (action === 'detail-cliente') el.addEventListener('click', () => { state.detailClienteId = el.dataset.id; state.detailTab = 'visao'; render(); });
@@ -3836,6 +3889,16 @@ function openForm(entity, id = null, defaults = {}) {
   modalForm.querySelector('[data-modal-cancel]')?.addEventListener('click', closeModal);
   modalForm.onsubmit = (event) => handleSubmit(event, entity, id);
   if (entity === 'relatorios') bindReportCalculations();
+  if (entity === 'tarefas' && !id) {
+    const clienteSel = modalForm.querySelector('[name="cliente_id"]');
+    const tituloInput = modalForm.querySelector('[name="titulo"]');
+    clienteSel?.addEventListener('change', () => {
+      const nome = state.clientes.find((c) => c.id === clienteSel.value)?.nome_empresa || '';
+      const current = tituloInput.value;
+      const stripped = current.replace(/^.+? - /, '');
+      tituloInput.value = nome ? `${nome} - ${stripped}` : stripped;
+    });
+  }
   renderLucide();
 }
 

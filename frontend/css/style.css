@@ -606,7 +606,7 @@ td strong { display: block; margin-bottom: 3px; }
 .task-list-head,
 .task-row {
   display: grid;
-  grid-template-columns: minmax(300px, 1fr) 160px 130px 160px 140px 80px;
+  grid-template-columns: minmax(280px, 1fr) 120px 120px 120px 60px;
   gap: 8px;
   align-items: center;
 }
@@ -659,6 +659,135 @@ td strong { display: block; margin-bottom: 3px; }
   font-weight: 800;
   padding: 0 5px;
 }
+
+/* View tabs active = purple accent */
+.task-view-tabs button.active {
+  background: #ede9fe;
+  border-color: #c4b5fd;
+  color: #5b21b6;
+  font-weight: 800;
+  box-shadow: none;
+}
+
+/* Assignee bubble (ClickUp-style) */
+.task-assignee-bubble {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 800;
+  cursor: default;
+  flex-shrink: 0;
+}
+.task-assignee-empty {
+  color: var(--muted);
+  font-size: 13px;
+}
+.task-cell-assignee {
+  display: flex;
+  align-items: center;
+}
+.task-cell-due {
+  display: flex;
+  align-items: center;
+}
+.task-cell-priority {
+  display: flex;
+  align-items: center;
+}
+
+/* Relative due date */
+.task-due-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  color: #475569;
+  font-weight: 600;
+}
+.task-due-cell.overdue { color: #ef4444; }
+.task-due-cell.soon    { color: #f59e0b; }
+.task-due-empty { color: var(--muted); font-size: 13px; }
+
+/* Priority flag */
+.task-priority-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* Checklist badge inline */
+.task-cl-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: #f1f5f9;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+.task-cl-badge.done { background: #d1fae5; color: #059669; }
+.task-cl-badge svg { width: 11px; height: 11px; }
+
+/* Recurrence icon inline */
+.task-recur-icon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--muted);
+  margin-left: 2px;
+}
+.task-recur-icon svg { width: 12px; height: 12px; }
+
+/* + Adicionar Tarefa per group */
+.task-add-row-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 36px;
+  padding: 0 16px 0 52px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+  transition: color 0.15s, background 0.1s;
+}
+.task-add-row-btn:hover { background: #f8fafc; color: #374151; }
+.task-add-row-btn svg { width: 14px; height: 14px; }
+
+/* + Novo status footer */
+.task-new-status-row {
+  border-top: 1px solid var(--line-soft);
+  padding: 4px 0;
+}
+.task-new-status-row button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color 0.15s;
+}
+.task-new-status-row button:hover { color: #374151; }
+.task-new-status-row button svg { width: 14px; height: 14px; }
+
+/* title-wrap */
+.task-title-wrap { min-width: 0; }
 
 /* Status dot */
 .task-status-dot {
