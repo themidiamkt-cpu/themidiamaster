@@ -3562,7 +3562,7 @@ function renderMetas() {
 }
 
 function renderAlertas() {
-  const metricaLabel = { cpl: 'Custo por Lead/Msg', ctr: 'CTR', roas: 'ROAS', spend: 'Gasto diario' };
+  const metricaLabel = { cpl: 'Custo por Lead/Msg', ctr: 'CTR', roas: 'ROAS', spend: 'Gasto diario', diario: 'Anotacao do diario' };
   const metricaUnit  = { cpl: 'R$', ctr: '%', roas: 'x', spend: 'R$' };
   const severidadeClass = { critica: 'status-urgente', alta: 'status-alta', media: 'status-media' };
 
@@ -3615,6 +3615,22 @@ function renderAlertas() {
         </tr></thead>
         <tbody>
           ${lista.map((a) => {
+            if (a.metrica === 'diario') {
+              return `<tr class="alert-row">
+                <td><strong>${escapeHtml(a.clientes?.nome_empresa || a.nome_cliente || '-')}</strong><span class="muted">${escapeHtml(a.meta_ads_act || '')}</span></td>
+                <td><strong>Anotacao do diario</strong><span class="muted" style="font-size:11px;display:block">Criada por gestor de trafego</span></td>
+                <td colspan="4">${escapeHtml(a.objetivo || 'Nova anotacao criada no Diario de Bordo')}</td>
+                <td><span class="status-badge ${severidadeClass[a.severidade] || ''}">${escapeHtml(a.severidade)}</span></td>
+                <td>${date(a.created_at)}</td>
+                <td class="row-actions">
+                  ${a.status === 'ativo' ? `
+                    <button class="ghost-button" data-action="alerta-to-task" data-id="${a.id}" title="Criar tarefa a partir deste alerta"><i data-lucide="clipboard-list"></i></button>
+                    <button class="ghost-button" data-action="resolver-alerta" data-id="${a.id}" title="Marcar como resolvido"><i data-lucide="check-circle"></i></button>
+                    <button class="icon-button" data-action="ignorar-alerta" data-id="${a.id}" title="Ignorar"><i data-lucide="eye-off"></i></button>
+                  ` : `<span class="status-badge ${a.status === 'resolvido' ? 'status-concluida' : 'status-cancelada'}">${a.status}</span>`}
+                </td>
+              </tr>`;
+            }
             const isMonetary = ['cpl', 'spend'].includes(a.metrica);
             const rowClass = a.metrica === 'cpl' ? 'alert-row alert-row-cpl' : a.metrica === 'spend' ? 'alert-row alert-row-spend' : 'alert-row';
             const fmtVal = (v) => v == null ? '—' : isMonetary ? money(v) : (a.metrica === 'ctr' ? `${Number(v||0).toFixed(2)}%` : `${Number(v||0).toFixed(2)}x`);
@@ -3661,6 +3677,7 @@ function renderAlertas() {
 }
 
 function isImprovingAlert(alerta) {
+  if (alerta.metrica === 'diario') return false;
   const current = Number(alerta.valor_1d ?? alerta.valor_atual);
   const reference = Number(alerta.valor_referencia ?? alerta.valor_7d ?? alerta.valor_3d);
   if (Number.isFinite(current) && Number.isFinite(reference)) {
@@ -4878,7 +4895,7 @@ function getDiaryDraftFromDom(clienteId) {
   const fieldSelector = (field) => `[data-action="diary-field"][data-client="${clienteId}"][data-field="${field}"]`;
   const okSelector = `[data-action="diary-ok"][data-client="${clienteId}"]`;
   return {
-    autor: 'Nicolas',
+    autor: state.session?.user?.email || 'Nicolas',
     anotacoes: document.querySelector(fieldSelector('anotacoes'))?.value || '',
     comentario_admin: document.querySelector(fieldSelector('comentario_admin'))?.value || '',
     revisao_verba_ok: document.querySelector(okSelector)?.checked ?? false,
@@ -4923,9 +4940,9 @@ function createTaskFromAlerta(alertaId) {
   const alerta = state.alertas.find((a) => a.id === alertaId);
   if (!alerta) return;
 
-  const metricaLabel = { cpl: 'CPL', ctr: 'CTR', roas: 'ROAS', spend: 'Gasto diario' };
+  const metricaLabel = { cpl: 'CPL', ctr: 'CTR', roas: 'ROAS', spend: 'Gasto diario', diario: 'Anotacao do diario' };
   const isMonetary = ['cpl', 'spend'].includes(alerta.metrica);
-  const fmtV = (v) => v == null ? '—' : isMonetary ? money(v) : (alerta.metrica === 'ctr' ? `${Number(v).toFixed(2)}%` : `${Number(v).toFixed(2)}x`);
+  const fmtV = (v) => v == null ? '-' : isMonetary ? money(v) : (alerta.metrica === 'ctr' ? `${Number(v).toFixed(2)}%` : `${Number(v).toFixed(2)}x`);
   const clienteName = alerta.clientes?.nome_empresa || alerta.nome_cliente || '';
   const metaRec = state.metas.find((m) => m.id === alerta.meta_id);
   const goalMap = { cpl: metaRec?.meta_custo_resultado, roas: metaRec?.meta_roas_minimo, ctr: metaRec?.meta_ctr_minimo, spend: metaRec?.verba_diaria_maxima };
@@ -4933,16 +4950,26 @@ function createTaskFromAlerta(alertaId) {
   const v1 = alerta.valor_1d ?? alerta.valor_atual;
   const sevToPrority = { critica: 'urgente', alta: 'alta', media: 'media' };
 
-  const defaultTitle = `${clienteName ? `${clienteName} — ` : ''}${metricaLabel[alerta.metrica] || alerta.metrica} fora da meta (hoje: ${fmtV(v1)}${goal != null ? `, meta: ${fmtV(goal)}` : ''})`;
-  const defaultDesc = [
-    `Alerta gerado automaticamente em ${date(alerta.created_at)}.`,
-    `Metrica: ${metricaLabel[alerta.metrica] || alerta.metrica}`,
-    `Hoje: ${fmtV(v1)}`,
-    alerta.valor_3d != null ? `Ultimos 3d: ${fmtV(alerta.valor_3d)}` : null,
-    alerta.valor_referencia != null ? `Ultimos 7d: ${fmtV(alerta.valor_referencia)}` : null,
-    goal != null ? `Meta configurada: ${fmtV(goal)}` : null,
-    `Severidade: ${alerta.severidade}`,
-  ].filter(Boolean).join('\n');
+  const isDiaryAlert = alerta.metrica === 'diario';
+  const defaultTitle = isDiaryAlert
+    ? `${clienteName ? `${clienteName}: ` : ''}Ver anotacao do gestor`
+    : `${clienteName ? `${clienteName} - ` : ''}${metricaLabel[alerta.metrica] || alerta.metrica} fora da meta (hoje: ${fmtV(v1)}${goal != null ? `, meta: ${fmtV(goal)}` : ''})`;
+  const defaultDesc = isDiaryAlert
+    ? [
+      `Alerta gerado automaticamente em ${date(alerta.created_at)}.`,
+      'Origem: anotacao criada por gestor de trafego no Diario de Bordo.',
+      alerta.objetivo ? `Anotacao: ${alerta.objetivo}` : null,
+      `Severidade: ${alerta.severidade}`,
+    ].filter(Boolean).join('\n')
+    : [
+      `Alerta gerado automaticamente em ${date(alerta.created_at)}.`,
+      `Metrica: ${metricaLabel[alerta.metrica] || alerta.metrica}`,
+      `Hoje: ${fmtV(v1)}`,
+      alerta.valor_3d != null ? `Ultimos 3d: ${fmtV(alerta.valor_3d)}` : null,
+      alerta.valor_referencia != null ? `Ultimos 7d: ${fmtV(alerta.valor_referencia)}` : null,
+      goal != null ? `Meta configurada: ${fmtV(goal)}` : null,
+      `Severidade: ${alerta.severidade}`,
+    ].filter(Boolean).join('\n');
 
   const tomorrow = isoDate(new Date(Date.now() + 86400000));
   const prioridade = sevToPrority[alerta.severidade] || 'media';
