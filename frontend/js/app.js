@@ -4495,7 +4495,7 @@ async function handleTaskAutomationAfterCompletion(tarefa) {
 }
 
 function getOnboardingStageNumber(tarefa) {
-  const match = String(tarefa?.titulo || '').trim().match(/^Onboarding - Etapa ([1-7])$/i);
+  const match = String(tarefa?.titulo || '').trim().match(/(?:^Onboarding - Etapa| - Etapa) ([1-7])(?:\b| -)/i);
   return match ? Number(match[1]) : null;
 }
 
@@ -4511,9 +4511,10 @@ async function getTaskCliente(tarefa) {
 }
 
 async function createOnboardingStageTask(cliente, stage, dueDate) {
+  const clientName = getTaskClientName(cliente);
   return createTaskIfMissing({
     cliente_id: cliente.id,
-    titulo: `Onboarding - Etapa ${stage}`,
+    titulo: clientName ? `${clientName} - Etapa ${stage}` : `Onboarding - Etapa ${stage}`,
     categoria: 'Onboarding',
     responsavel: getClientTaskOwner(cliente),
     prioridade: 'alta',
@@ -4529,6 +4530,7 @@ async function createOnboardingStageTask(cliente, stage, dueDate) {
 
 async function createPaidTrafficTasks(cliente) {
   const owner = getClientTaskOwner(cliente);
+  const clientName = getTaskClientName(cliente);
   const templates = [
     {
       titulo: 'Trafego pago - Otimizacao mensal',
@@ -4575,7 +4577,7 @@ async function createPaidTrafficTasks(cliente) {
 
   await Promise.all(templates.map((template) => createTaskIfMissing({
     cliente_id: cliente.id,
-    titulo: template.titulo,
+    titulo: clientName ? `${clientName} - ${template.titulo}` : template.titulo,
     categoria: 'Trafego Pago',
     responsavel: template.responsavel || owner,
     prioridade: 'media',
@@ -4604,6 +4606,10 @@ async function createTaskIfMissing(payload) {
 
 function normalizeTaskTitle(value) {
   return String(value || '').trim().toLowerCase();
+}
+
+function getTaskClientName(cliente) {
+  return String(cliente?.nome_empresa || '').trim();
 }
 
 function getClientTaskOwner(cliente) {
