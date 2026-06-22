@@ -30,7 +30,8 @@ const whatsappWebhookUrl = 'https://automacao2.themidiamarketing.com.br/webhook/
 const mainAdminEmail = 'themidiamkt@gmail.com';
 const viewStorageKey = 'theMidiaMaster.activeView';
 const adminViews = ['dashboard', 'dashboardClientes', 'clientes', 'relatorios', 'crm', 'crmFollowups', 'metaAds', 'gbp', 'diario', 'tarefas', 'equipe', 'metas', 'alertas', 'config'];
-const teamViews = ['relatorios', 'metaAds', 'gbp', 'diario', 'tarefas'];
+const trafficManagerViews = ['dashboardClientes', 'metaAds', 'gbp', 'diario', 'tarefas', 'metas', 'alertas'];
+const teamViews = trafficManagerViews;
 let googlePlacesLoader = null;
 let googlePlacesMap = null;
 
@@ -250,14 +251,21 @@ async function loadAll() {
       return;
     }
 
-    const [clientes, relatorios, vendas, tarefas, diarios] = await withTimeout(Promise.all([
+    const dashboardRange = getFourWeeksRange();
+    const [clientes, relatorios, vendas, metaAdsDailyInsights, metaAdsAccountHealth, gmnAnalises, tarefas, diarios, alertas, metas] = await withTimeout(Promise.all([
       clienteService.list({ order: 'nome_empresa', ascending: true }),
       relatorioService.list({ columns: '*, clientes(nome_empresa, meta_ads_act)' }),
       safeVendasList(),
+      safeMetaAdsDailyInsightsList(dashboardRange.since),
+      safeMetaAdsAccountHealthList(),
+      safeGmnAnalisesList(),
       tarefaService.list({ columns: '*, clientes(nome_empresa)' }),
       safeDiaryList(),
+      safeAlertasList(),
+      safeList(() => metaClienteService.listAll()),
     ]), 12000, 'O Supabase demorou para carregar os dados. Mostrando o painel em modo vazio ate atualizar.');
-    Object.assign(state, { clientes, leads: [], crmWebhookLogs: [], campanhas: [], relatorios, vendas, tarefas, diarios, equipe: [] });
+    Object.assign(state, { clientes, leads: [], crmWebhookLogs: [], campanhas: [], relatorios, vendas, metaAdsDailyInsights, metaAdsAccountHealth, gmnAnalises, tarefas, diarios, equipe: [], alertas, metas });
+    updateAlertasBadge();
   } catch (error) {
     state.loadError = error.message || 'Nao foi possivel carregar os dados do Supabase.';
     showError(error);
@@ -391,12 +399,22 @@ function isMainAdmin() {
   return state.session?.user?.email?.toLowerCase() === mainAdminEmail;
 }
 
+function getUserRole() {
+  return state.session?.user?.app_metadata?.funcao || state.session?.user?.user_metadata?.funcao || '';
+}
+
+function isTrafficManager() {
+  return getUserRole() === 'gestor_trafego';
+}
+
 function getAllowedViews() {
-  return isMainAdmin() ? adminViews : teamViews;
+  if (isMainAdmin()) return adminViews;
+  if (isTrafficManager()) return trafficManagerViews;
+  return teamViews;
 }
 
 function getDefaultView() {
-  return isMainAdmin() ? 'dashboard' : 'metaAds';
+  return isMainAdmin() ? 'dashboard' : 'dashboardClientes';
 }
 
 function canAccessView(view) {
@@ -3565,11 +3583,12 @@ function isImprovingAlert(alerta) {
 function renderEquipe() {
   return `
     ${pageHeader('Equipe', 'Responsaveis internos da operacao.', `<button class="secondary-button" data-action="export" data-entity="equipe"><i data-lucide="download"></i>CSV</button><button class="button" data-action="new" data-entity="equipe"><i data-lucide="plus"></i>Novo membro</button>`)}
-    ${renderTablePanel('equipe', ['Nome', 'Email', 'Cargo', 'Status', ''], state.equipe.map((member) => `
+    ${renderTablePanel('equipe', ['Nome', 'Email', 'Cargo', 'Funcao', 'Status', ''], state.equipe.map((member) => `
       <tr>
         <td><strong>${escapeHtml(member.nome)}</strong></td>
         <td>${escapeHtml(member.email || '-')}</td>
         <td>${escapeHtml(member.cargo || '-')}</td>
+        <td>${escapeHtml(label(member.funcao || 'gestor_trafego'))}</td>
         <td>${statusBadge(member.status)}</td>
         <td class="row-actions">${actionButtons('equipe', member.id)}</td>
       </tr>`).join(''))}
@@ -3976,6 +3995,7 @@ async function handleSubmit(event, entity, id) {
     payload.meta_ads_act_snapshot = state.clientes.find((cliente) => cliente.id === payload.cliente_id)?.meta_ads_act || null;
   }
   if (entity === 'tarefas') normalizeTaskPayload(payload);
+  if (entity === 'equipe' && id) delete payload.senha;
   if (entity === 'crm' && id) {
     const currentLead = state.leads.find((lead) => lead.id === id);
     if (currentLead?.etapa && payload.etapa && currentLead.etapa !== payload.etapa) {
@@ -3986,7 +4006,9 @@ async function handleSubmit(event, entity, id) {
   const previousLead = entity === 'crm' && id ? state.leads.find((lead) => lead.id === id) : null;
 
   try {
-    const saved = await getService(entity)[id ? 'update' : 'create'](id || payload, payload);
+    const saved = entity === 'equipe' && !id
+      ? await createFuncionario(payload)
+      : await getService(entity)[id ? 'update' : 'create'](id || payload, payload);
     if (entity === 'clientes' && !id && saved?.id) {
       await createDefaultTasksForNewClient(saved);
     }
@@ -4000,6 +4022,15 @@ async function handleSubmit(event, entity, id) {
   } catch (error) {
     showError(error);
   }
+}
+
+async function createFuncionario(payload) {
+  const { data, error } = await supabase.functions.invoke('create-funcionario', {
+    body: payload,
+  });
+  if (error) throw error;
+  if (!data?.ok) throw new Error(data?.error || 'Nao foi possivel criar o funcionario.');
+  return data.funcionario;
 }
 
 async function handleDelete(entity, id) {
@@ -5062,8 +5093,10 @@ function getFormSchema(entity) {
       title: 'Membro da equipe',
       fields: [
         { name: 'nome', label: 'Nome', required: true },
-        { name: 'email', label: 'Email', type: 'email' },
+        { name: 'email', label: 'Email', type: 'email', required: true },
+        { name: 'senha', label: 'Senha de acesso', type: 'password' },
         { name: 'cargo', label: 'Cargo' },
+        { name: 'funcao', label: 'Funcao', type: 'select', options: ['gestor_trafego', 'operacao', 'admin'], customLabels: [{ value: 'gestor_trafego', label: 'Gestor de trafego' }, { value: 'operacao', label: 'Operacao' }, { value: 'admin', label: 'Admin' }], default: 'gestor_trafego' },
         { name: 'status', label: 'Status', type: 'select', options: ['ativo', 'inativo'], default: 'ativo' },
       ],
     },
