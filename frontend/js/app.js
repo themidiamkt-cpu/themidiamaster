@@ -3229,6 +3229,21 @@ function getTaskResponsibleOptions(tasks = state.tarefas) {
     .sort((a, b) => a.localeCompare(b, 'pt-BR'));
 }
 
+function getTaskResponsibleFormOptions() {
+  const names = [{ value: 'Roberto', label: 'Roberto (CEO)' }];
+  state.equipe.forEach((member) => {
+    const name = String(member.nome || member.nome_completo || member.email || '').trim();
+    if (name) names.push({ value: name, label: name });
+  });
+  const seen = new Set();
+  return names.filter((item) => {
+    const key = item.value.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function filterTasksByResponsible(tasks) {
   const selected = state.taskResponsibleFilter || 'all';
   if (selected === 'all') return tasks;
@@ -4325,7 +4340,10 @@ function renderField(field, value) {
   const safeValue = escapeHtml(value ?? field.default ?? '');
   if (field.type === 'select') {
     const customLabels = Object.fromEntries((field.customLabels || []).map((item) => [item.value, item.label]));
-    return `<label class="${field.full ? 'full' : ''}">${field.label}<select ${common}><option value="">Selecione</option>${field.options.map((opt) => `<option value="${opt}" ${String(value ?? field.default ?? '') === opt ? 'selected' : ''}>${escapeHtml(customLabels[opt] || label(opt))}</option>`).join('')}</select></label>`;
+    const selected = String(value ?? field.default ?? '');
+    const options = [...field.options];
+    if (selected && !options.includes(selected)) options.unshift(selected);
+    return `<label class="${field.full ? 'full' : ''}">${field.label}<select ${common}><option value="">Selecione</option>${options.map((opt) => `<option value="${escapeHtml(opt)}" ${selected === opt ? 'selected' : ''}>${escapeHtml(customLabels[opt] || label(opt))}</option>`).join('')}</select></label>`;
   }
   if (field.type === 'multiselect') {
     const selected = new Set(Array.isArray(value) ? value : []);
@@ -5351,6 +5369,7 @@ function calculateReport(payload) {
 function getFormSchema(entity) {
   const clienteOptions = state.clientes.map((cliente) => ({ value: cliente.id, label: cliente.nome_empresa }));
   const clientSelect = { name: 'cliente_id', label: 'Cliente', type: 'select', options: clienteOptions.map((c) => c.value), customLabels: clienteOptions };
+  const taskResponsibleOptions = getTaskResponsibleFormOptions();
   const schemas = {
     clientes: {
       title: 'Cliente',
@@ -5459,7 +5478,7 @@ function getFormSchema(entity) {
         clientSelect,
         { name: 'titulo', label: 'Titulo', required: true },
         { name: 'categoria', label: 'Categoria', default: 'Geral' },
-        { name: 'responsavel', label: 'Responsavel' },
+        { name: 'responsavel', label: 'Responsavel', type: 'select', options: taskResponsibleOptions.map((item) => item.value), customLabels: taskResponsibleOptions },
         { name: 'prioridade', label: 'Prioridade', type: 'select', options: ['baixa', 'media', 'alta', 'urgente'], default: 'media' },
         { name: 'status', label: 'Status', type: 'select', options: ['pendente', 'em_andamento', 'concluida', 'cancelada'], default: 'pendente' },
         { name: 'data_inicio', label: 'Data de inicio', type: 'date' },
