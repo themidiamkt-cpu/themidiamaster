@@ -4085,7 +4085,8 @@ async function handleSubmit(event, entity, id) {
     payload.meta_ads_act_snapshot = state.clientes.find((cliente) => cliente.id === payload.cliente_id)?.meta_ads_act || null;
   }
   if (entity === 'tarefas') normalizeTaskPayload(payload);
-  if (entity === 'equipe' && id) delete payload.senha;
+  const shouldProvisionFuncionarioAuth = entity === 'equipe' && (!id || String(payload.senha || '').trim());
+  if (entity === 'equipe' && id && !shouldProvisionFuncionarioAuth) delete payload.senha;
   if (entity === 'crm' && id) {
     const currentLead = state.leads.find((lead) => lead.id === id);
     if (currentLead?.etapa && payload.etapa && currentLead.etapa !== payload.etapa) {
@@ -4096,8 +4097,8 @@ async function handleSubmit(event, entity, id) {
   const previousLead = entity === 'crm' && id ? state.leads.find((lead) => lead.id === id) : null;
 
   try {
-    const saved = entity === 'equipe' && !id
-      ? await createFuncionario(payload)
+    const saved = shouldProvisionFuncionarioAuth
+      ? await createFuncionario({ ...(id ? getEntityList(entity).find((item) => item.id === id) : {}), ...payload })
       : await getService(entity)[id ? 'update' : 'create'](id || payload, payload);
     if (entity === 'clientes' && !id && saved?.id) {
       await createDefaultTasksForNewClient(saved);
