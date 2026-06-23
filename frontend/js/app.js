@@ -2219,8 +2219,9 @@ function renderRelatorios() {
 
 function renderRelatoriosSalvos() {
   return `
-    ${pageHeader('Relatorios', 'Lancamento manual preparado para Meta Ads API no futuro.', `<button class="secondary-button" data-action="print"><i data-lucide="printer"></i>PDF</button><button class="secondary-button" data-action="export" data-entity="relatorios"><i data-lucide="download"></i>CSV</button><button class="button" data-action="new" data-entity="relatorios"><i data-lucide="plus"></i>Novo relatorio</button>`)}
+    ${pageHeader('Relatorios', 'Relatorios Meta Ads e vendas dos clientes no mesmo lugar.', `<button class="secondary-button" data-action="print"><i data-lucide="printer"></i>PDF</button><button class="secondary-button" data-action="export" data-entity="relatorios"><i data-lucide="download"></i>CSV relatorios</button><button class="secondary-button" data-action="export" data-entity="vendas"><i data-lucide="download"></i>CSV vendas</button><button class="button" data-action="new" data-entity="relatorios"><i data-lucide="plus"></i>Novo relatorio</button>`)}
     ${renderRelatoriosTable()}
+    ${renderVendasClientesPanel()}
   `;
 }
 
@@ -2232,6 +2233,40 @@ function renderRelatoriosTable() {
         <td>${escapeHtml(relatorio.meta_ads_act_snapshot || '-')}</td>
         <td class="row-actions">${relatorioActionButtons(relatorio.id)}</td>
       </tr>`).join(''));
+}
+
+function renderVendasClientesPanel() {
+  const vendas = [...state.vendas].sort((a, b) => String(b.data_venda || '').localeCompare(String(a.data_venda || '')));
+  return `
+    <section class="panel">
+      <div class="panel-header">
+        <div>
+          <h2>Vendas dos clientes</h2>
+          <p class="muted">Vendas manuais cadastradas para cruzar com os dados de Meta Ads.</p>
+        </div>
+        <div class="row-actions">
+          <button class="secondary-button" data-action="export" data-entity="vendas"><i data-lucide="download"></i>CSV</button>
+          <button class="button" data-action="new" data-entity="vendas"><i data-lucide="plus"></i>Lancar venda</button>
+        </div>
+      </div>
+      ${state.vendasMissingTable ? `<div class="state"><strong>Tabela de vendas ainda nao existe</strong><span>Rode a migration 20260617_vendas_cliente.sql no Supabase para salvar vendas manuais.</span></div>` : renderVendasClientesTable(vendas)}
+    </section>
+  `;
+}
+
+function renderVendasClientesTable(vendas) {
+  if (!vendas.length) return emptyState('Nenhuma venda lancada', 'Cadastre vendas dos clientes para alimentar os relatorios e dashboards.');
+  return `<div class="table-wrap"><table><thead><tr><th>Cliente</th><th>Data</th><th>Faturamento</th><th>Vendas</th><th>Produtos</th><th>Ticket medio</th><th>Origem</th><th></th></tr></thead><tbody>${vendas.map((venda) => `
+    <tr>
+      <td><strong>${escapeHtml(venda.clientes?.nome_empresa || getClienteName(venda.cliente_id) || '-')}</strong></td>
+      <td>${date(venda.data_venda)}</td>
+      <td>${money(venda.valor_total)}</td>
+      <td>${number(venda.quantidade_vendas)}</td>
+      <td>${number(venda.quantidade_produtos)}</td>
+      <td>${money(venda.ticket_medio || ratio(venda.valor_total, venda.quantidade_vendas))}</td>
+      <td>${escapeHtml(venda.origem || 'Manual')}</td>
+      <td class="row-actions">${actionButtons('vendas', venda.id)}</td>
+    </tr>`).join('')}</tbody></table></div>`;
 }
 
 function renderRelatorioDetail(id) {
@@ -2309,6 +2344,7 @@ function renderMetaAds() {
         </div>
         ${renderRelatoriosTable()}
       </section>
+      ${renderVendasClientesPanel()}
     ` : `
       <section class="panel screen-only">
         <div class="panel-header"><h2>Consulta Meta Ads API</h2>${statusBadge('ativo')}</div>
