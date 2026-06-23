@@ -3268,6 +3268,7 @@ function getTaskResponsibleOptions(tasks = state.tarefas) {
 function getTaskResponsibleFormOptions() {
   const names = [{ value: 'Roberto', label: 'Roberto (CEO)' }];
   state.equipe.forEach((member) => {
+    if (member.status && member.status !== 'ativo') return;
     const name = String(member.nome || member.nome_completo || member.email || '').trim();
     if (name) names.push({ value: name, label: name });
   });
@@ -5429,7 +5430,7 @@ function getFormSchema(entity) {
         { name: 'site', label: 'Site' },
         { name: 'landing_page', label: 'Landing page' },
         { name: 'crm_utilizado', label: 'CRM utilizado' },
-        { name: 'responsavel_interno', label: 'Responsavel interno' },
+        { name: 'responsavel_interno', label: 'Responsavel interno', type: 'select', options: taskResponsibleOptions.map((item) => item.value), customLabels: taskResponsibleOptions },
         { name: 'observacoes', label: 'Observacoes', type: 'textarea' },
       ],
     },
