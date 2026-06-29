@@ -317,8 +317,25 @@ function phoneVariants(value: unknown) {
 }
 
 function phonesMatch(left: unknown, right: unknown) {
-  const leftVariants = new Set(phoneVariants(left));
-  return phoneVariants(right).some((variant) => leftVariants.has(variant));
+  const leftVariants = phoneVariants(left);
+  const rightVariants = phoneVariants(right);
+  return rightVariants.some((rightVariant) =>
+    leftVariants.some((leftVariant) =>
+      leftVariant === rightVariant || isLikelyTruncatedBrazilPhone(leftVariant, rightVariant)
+    )
+  );
+}
+
+function isLikelyTruncatedBrazilPhone(left: string, right: string) {
+  const leftDigits = normalizePhone(left);
+  const rightDigits = normalizePhone(right);
+  if (!leftDigits || !rightDigits) return false;
+  if (!leftDigits.startsWith('55') || !rightDigits.startsWith('55')) return false;
+  if (Math.abs(leftDigits.length - rightDigits.length) !== 1) return false;
+
+  const shorter = leftDigits.length < rightDigits.length ? leftDigits : rightDigits;
+  const longer = leftDigits.length < rightDigits.length ? rightDigits : leftDigits;
+  return shorter.length >= 12 && longer.length <= 13 && longer.startsWith(shorter);
 }
 
 function normalizePotential(value: unknown) {

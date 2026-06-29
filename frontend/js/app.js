@@ -31,7 +31,7 @@ const whatsappWebhookUrl = 'https://automacao2.themidiamarketing.com.br/webhook/
 const mainAdminEmail = 'themidiamkt@gmail.com';
 const viewStorageKey = 'theMidiaMaster.activeView';
 const adminViews = ['dashboard', 'dashboardClientes', 'clientes', 'relatorios', 'crm', 'crmFollowups', 'metaAds', 'gbp', 'diario', 'tarefas', 'playbooks', 'equipe', 'metas', 'alertas', 'config'];
-const trafficManagerViews = ['dashboardClientes', 'metaAds', 'gbp', 'diario', 'tarefas', 'playbooks', 'metas', 'alertas'];
+const trafficManagerViews = ['dashboardClientes', 'clientes', 'metaAds', 'gbp', 'diario', 'tarefas', 'playbooks', 'metas', 'alertas'];
 const teamViews = trafficManagerViews;
 let googlePlacesLoader = null;
 let googlePlacesMap = null;
@@ -40,6 +40,7 @@ const state = {
   view: getStoredView() || 'dashboard',
   taskDetailId: null,
   activeConversationLeadId: null,
+  crmSearch: '',
   taskView: 'hoje',
   taskResponsibleFilter: 'all',
   taskDoneExpanded: {},
@@ -1514,23 +1515,32 @@ function operationFollowupRow(lead) {
 
 function renderClientes() {
   scheduleClientMetaCostLoad();
+  const admin = isMainAdmin();
+  const headerActions = [
+    '<button class="secondary-button" data-action="refresh-client-meta-costs"><i data-lucide="refresh-cw"></i>Custo 7d Meta</button>',
+    admin ? '<button class="secondary-button" data-action="export" data-entity="clientes"><i data-lucide="download"></i>CSV</button>' : '',
+    admin ? '<button class="button" data-action="new" data-entity="clientes"><i data-lucide="plus"></i>Novo cliente</button>' : '',
+  ].filter(Boolean).join('');
+  const heads = admin
+    ? ['Empresa', 'Status', 'Plano', 'Mensalidade', 'Custo resultado 7d', 'Meta Ads', 'Saude conta', 'Responsavel', '']
+    : ['Empresa', 'Status', 'Plano', 'Custo resultado 7d', 'Meta Ads', 'Saude conta', 'Responsavel', ''];
   return `
-    ${pageHeader('Clientes', 'Cadastro completo dos clientes da agencia.', `<button class="secondary-button" data-action="refresh-client-meta-costs"><i data-lucide="refresh-cw"></i>Custo 7d Meta</button><button class="secondary-button" data-action="export" data-entity="clientes"><i data-lucide="download"></i>CSV</button><button class="button" data-action="new" data-entity="clientes"><i data-lucide="plus"></i>Novo cliente</button>`)}
+    ${pageHeader('Clientes', admin ? 'Cadastro completo dos clientes da agencia.' : 'Clientes atribuidos a voce.', headerActions)}
     ${state.clientMetaCosts.error ? `<div class="state"><strong>Meta Ads</strong><span>${escapeHtml(state.clientMetaCosts.error)}</span></div>` : ''}
-    ${renderTablePanel('clientes', ['Empresa', 'Status', 'Plano', 'Mensalidade', 'Custo resultado 7d', 'Meta Ads', 'Saude conta', 'Responsavel', ''], state.clientes.map((cliente) => `
+    ${renderTablePanel('clientes', heads, state.clientes.map((cliente) => `
       <tr>
         <td><strong>${escapeHtml(cliente.nome_empresa)}</strong><span class="muted">${escapeHtml(cliente.segmento || cliente.cidade || '')}</span></td>
         <td>${statusBadge(cliente.status)}</td>
         <td>${statusBadge(cliente.plano_contratado || 'personalizado')}</td>
-        <td>${money(cliente.valor_mensal)}</td>
+        ${admin ? `<td>${money(cliente.valor_mensal)}</td>` : ''}
         <td>${renderClientMetaCost(cliente)}</td>
         <td>${escapeHtml(cliente.meta_ads_act || '-')}</td>
         <td>${renderMetaAccountHealth(cliente)}</td>
         <td>${escapeHtml(cliente.responsavel_interno || cliente.responsavel || '-')}</td>
         <td class="row-actions">
           <button class="ghost-button" data-action="detail-cliente" data-id="${cliente.id}"><i data-lucide="panel-right-open"></i>Abrir</button>
-          <button class="icon-button" data-action="edit" data-entity="clientes" data-id="${cliente.id}" aria-label="Editar"><i data-lucide="pencil"></i></button>
-          <button class="icon-button" data-action="delete" data-entity="clientes" data-id="${cliente.id}" aria-label="Excluir"><i data-lucide="trash-2"></i></button>
+          ${admin ? `<button class="icon-button" data-action="edit" data-entity="clientes" data-id="${cliente.id}" aria-label="Editar"><i data-lucide="pencil"></i></button>
+          <button class="icon-button" data-action="delete" data-entity="clientes" data-id="${cliente.id}" aria-label="Excluir"><i data-lucide="trash-2"></i></button>` : ''}
         </td>
       </tr>`).join(''))}
   `;
@@ -1644,8 +1654,12 @@ async function loadClientMetaCosts(force = false) {
 }
 
 function renderCrm() {
+  const searchTerm = normalizeSearchText(state.crmSearch);
+  const filteredLeads = searchTerm
+    ? state.leads.filter((lead) => getLeadSearchText(lead).includes(searchTerm))
+    : state.leads;
   const kanban = crmStages.map((stage) => {
-    const leads = state.leads.filter((lead) => lead.etapa === stage);
+    const leads = filteredLeads.filter((lead) => lead.etapa === stage);
     const stageValue = leads.reduce((sum, lead) => sum + Number(lead.investimento_disponivel || lead.ticket_medio || 0), 0);
     return `
       <section class="kanban-column crm-stage-${stage}">
@@ -1657,7 +1671,7 @@ function renderCrm() {
           <small>${money(stageValue)}</small>
         </header>
         <div class="kanban-column-body" data-crm-drop-stage="${escapeHtml(stage)}">
-          ${leads.map(renderLeadCard).join('') || emptyState('Sem leads', 'Arraste leads para esta etapa.')}
+          ${leads.map(renderLeadCard).join('') || (searchTerm ? emptyState('Nenhum lead encontrado', 'Tente outra busca.') : emptyState('Sem leads', 'Arraste leads para esta etapa.'))}
         </div>
       </section>
     `;
@@ -1671,8 +1685,33 @@ function renderCrm() {
       ${crmPipelineMetric('Propostas', state.leads.filter((lead) => ['proposta_enviada', 'fechado'].includes(lead.etapa)).length)}
       ${crmPipelineMetric('Fechados', state.leads.filter((lead) => lead.etapa === 'fechado').length)}
     </div>
+    <div class="crm-search-bar">
+      <i data-lucide="search"></i>
+      <input class="input" type="search" data-action="crm-search" value="${escapeHtml(state.crmSearch)}" placeholder="Pesquisar lead..." autocomplete="off">
+      ${searchTerm ? `<span>${filteredLeads.length} de ${state.leads.length}</span>` : ''}
+    </div>
     <div class="kanban">${kanban}</div>
   `;
+}
+
+function normalizeSearchText(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
+}
+
+function getLeadSearchText(lead) {
+  return normalizeSearchText([
+    lead.nome_empresa,
+    lead.whatsapp,
+    lead.email,
+    lead.origem_lead,
+    lead.responsavel,
+    lead.observacoes,
+    lead.etapa ? label(lead.etapa) : '',
+  ].filter(Boolean).join(' '));
 }
 
 function renderCrmFollowups() {
@@ -4008,13 +4047,13 @@ async function renderClienteDetail(id) {
   const progress = onboardingProgress(onboarding);
 
   app.innerHTML = `
-    ${pageHeader(cliente.nome_empresa, 'Detalhe completo do cliente.', `<button class="secondary-button" data-action="back-clientes"><i data-lucide="arrow-left"></i>Voltar</button><button class="button" data-action="edit" data-entity="clientes" data-id="${id}"><i data-lucide="pencil"></i>Editar</button>`)}
+    ${pageHeader(cliente.nome_empresa, 'Detalhe completo do cliente.', `<button class="secondary-button" data-action="back-clientes"><i data-lucide="arrow-left"></i>Voltar</button>${isMainAdmin() ? `<button class="button" data-action="edit" data-entity="clientes" data-id="${id}"><i data-lucide="pencil"></i>Editar</button>` : ''}`)}
     <section class="detail-top">
       <div class="panel">
         <div class="kv">
           ${areaSummary('Status', label(cliente.status))}
           ${areaSummary('Plano', label(cliente.plano_contratado))}
-          ${areaSummary('Mensalidade', money(cliente.valor_mensal))}
+          ${isMainAdmin() ? areaSummary('Mensalidade', money(cliente.valor_mensal)) : ''}
           ${areaSummary('Verba de trafego', money(cliente.verba_mensal_trafego))}
           ${areaSummary('Meta Ads act', cliente.meta_ads_act || '-')}
           ${areaSummary('Responsavel interno', cliente.responsavel_interno || '-')}
@@ -4151,6 +4190,14 @@ function bindGlobalActions() {
     if (action === 'open-lead-conversation') el.addEventListener('click', () => openLeadConversation(el.dataset.id));
     if (action === 'open-followup-result') el.addEventListener('click', () => openFollowupResultModal(el.dataset.id));
     if (action === 'move-lead') el.addEventListener('change', () => moveLead(el.dataset.id, el.value));
+    if (action === 'crm-search') el.addEventListener('input', () => {
+      const cursor = el.selectionStart;
+      state.crmSearch = el.value;
+      render();
+      const input = document.querySelector('[data-action="crm-search"]');
+      input?.focus();
+      input?.setSelectionRange(cursor, cursor);
+    });
     if (action === 'toggle-onboarding') el.addEventListener('change', () => updateOnboarding(el.dataset.id, { [el.dataset.field]: el.checked }));
     if (action === 'onboarding-notes') el.addEventListener('blur', () => updateOnboarding(el.dataset.id, { observacoes: el.value }));
     if (action === 'meta-client') el.addEventListener('change', () => {
@@ -4648,42 +4695,56 @@ async function createPaidTrafficTasks(cliente) {
       titulo: 'Trafego pago - Otimizacao mensal',
       recorrencia: 'mensal_primeiro_dia_util',
       data_vencimento: getUpcomingFirstBusinessDay(),
+      checklists: paidTrafficChecklist('otimizacao_mensal'),
     },
     {
-      titulo: 'Trafego pago - Criativos',
-      recorrencia: 'semanal',
-      recorrencia_dia_semana: 2,
-      data_vencimento: getNextWeeklyTaskDate(2),
-    },
-    {
-      titulo: 'Trafego pago - Funil',
+      titulo: 'Trafego pago - Analise de funil + acompanhamento (toque 2 de 3)',
       recorrencia: 'semanal',
       recorrencia_dia_semana: 3,
       data_vencimento: getNextWeeklyTaskDate(3),
+      checklists: paidTrafficChecklist('funil'),
     },
     {
-      titulo: 'Trafego pago - Revisao',
+      titulo: 'Trafego pago - Revisao diaria de verba e performance',
       recorrencia: 'diaria',
       data_vencimento: addDaysToIsoDate(isoDate(new Date()), 1),
+      checklists: paidTrafficChecklist('revisao_diaria'),
     },
     {
       titulo: 'Trafego pago - Otimizacao semanal',
       recorrencia: 'semanal',
       recorrencia_dia_semana: 2,
       data_vencimento: getNextWeeklyTaskDate(2),
+      checklists: paidTrafficChecklist('otimizacao_semanal'),
     },
     {
-      titulo: 'Trafego pago - Relatorio',
+      titulo: 'Trafego pago - Relatorio e feedback semanal (toque 1 de 3)',
       recorrencia: 'semanal',
       recorrencia_dia_semana: 1,
       data_vencimento: getNextWeeklyTaskDate(1),
       responsavel: owner,
+      checklists: paidTrafficChecklist('relatorio'),
+    },
+    {
+      titulo: 'Trafego pago - Testes, criativos e concorrencia',
+      recorrencia: 'semanal',
+      recorrencia_dia_semana: 4,
+      data_vencimento: getNextWeeklyTaskDate(4),
+      checklists: paidTrafficChecklist('testes_concorrencia'),
+    },
+    {
+      titulo: 'Trafego pago - Fechamento e preparacao',
+      recorrencia: 'semanal',
+      recorrencia_dia_semana: 5,
+      data_vencimento: getNextWeeklyTaskDate(5),
+      checklists: paidTrafficChecklist('fechamento'),
     },
     {
       titulo: 'Trafego pago - Avaliar cliente por 1 dia',
       recorrencia: 'mensal_primeiro_dia_util',
       data_vencimento: getUpcomingFirstBusinessDay(),
       responsavel: owner,
+      checklists: paidTrafficChecklist('avaliacao_cliente'),
     },
   ];
 
@@ -4700,7 +4761,141 @@ async function createPaidTrafficTasks(cliente) {
     recorrencia_ativa: true,
     recorrencia_dia_semana: template.recorrencia_dia_semana ?? null,
     descricao: 'Rotina automatica criada apos o onboarding.',
+    checklists: template.checklists || [],
   })));
+}
+
+function buildChecklist(title, items) {
+  return { title, items: items.map((text) => ({ text, done: false })) };
+}
+
+function paidTrafficChecklist(type) {
+  const checklists = {
+    revisao_diaria: [
+      buildChecklist('Meta Ads', [
+        'Verificar se as campanhas tiveram veiculacao ontem e hoje',
+        'Verificar criativos ou publicos com CPA muito acima da media',
+        'Pausar o que estiver extremamente ruim',
+        'Verificar se campanhas com mais performance recebem mais investimento',
+        'Ajustar verba de 20% em 20% quando fizer sentido',
+        'Caso tenha poucos criativos, testar postagem ou solicitar novos criativos',
+        'Conferir saldo e cartao de cada conta (conta nao pode parar por saldo)',
+        'Olhar notificacoes da conta',
+      ]),
+      buildChecklist('Google Ads', [
+        'Verificar veiculacao',
+        'Negativar termos de pesquisa sem contexto',
+        'Ver palavras-chave, criativos ou publicos com CPA alto',
+        'Ajustar ROAS, CPC ou CPA desejado se nao estiver gastando orcamento',
+        'Olhar notificacoes da conta',
+      ]),
+    ],
+    relatorio: [
+      buildChecklist('Relatorio e feedback semanal (toque 1 de 3)', [
+        'Abrir dashboard do cliente no Looker Studio',
+        'Selecionar periodo do relatorio',
+        'Gerar relatorio com IA e revisar',
+        'Gerar link do relatorio no Looker Studio',
+        'Enviar para o grupo do WhatsApp com a mensagem padrao',
+        'Salvar PDF na pasta do cliente no Google Drive',
+      ]),
+    ],
+    otimizacao_semanal: [
+      buildChecklist('Meta Ads', [
+        'Otimizar orcamento de 20% em 20% se necessario',
+        'Otimizar criativos, mantendo 2 a 6 criativos ativos por conjunto',
+        'Pausar publicos com CPA alto',
+        'Testar novos publicos',
+        'Ajustar estrutura de campanha se o resultado estiver ruim',
+        'Otimizar catalogo de produtos',
+        'Revisar destino, site, pagina ou WhatsApp',
+      ]),
+      buildChecklist('Google Ads', [
+        'Checar recomendacoes',
+        'Negativar palavras-chave com filtro de 7 e 15 dias',
+        'Otimizar grupos de anuncios',
+        'Revisar onde os anuncios aparecem em Display e YouTube',
+        'Otimizar lances por publico',
+      ]),
+      buildChecklist('Criativos', [
+        'Solicitar novos criativos para o time de design',
+        'Sugerir formatos e abordagens criativas',
+        'Solicitar 2 a 3 novos criativos quando necessario',
+      ]),
+    ],
+    funil: [
+      buildChecklist('Funil e site', [
+        'Analisar taxa de conversao do site',
+        'Verificar abandono de carrinho',
+        'Analisar funil de checkout',
+        'Revisar paginas de produto',
+        'Verificar velocidade do site',
+        'Analisar comportamento e pontos de queda',
+      ]),
+      buildChecklist('Instagram', [
+        'Ver se tem postagens com frequencia',
+        'Ver se os Stories estao ativos',
+        'Conferir bio com diferenciacao e CTA',
+        'Conferir destaques',
+        'Conferir sacolinha do Instagram',
+        'Conferir posts fixados',
+      ]),
+      buildChecklist('Comunicacao', [
+        'Enviar a mensagem de acompanhamento no grupo do cliente',
+      ]),
+    ],
+    testes_concorrencia: [
+      buildChecklist('Testes, criativos e concorrencia', [
+        'Avaliar os testes que subiram na terca (ja deu tempo de juntar dado)',
+        'Escalar o que o teste indicou como bom, cortar o que nao andou',
+        'Espiar a concorrencia na Biblioteca de Anuncios do Meta',
+        'Anotar angulos e ofertas que valem testar',
+        'Definir e solicitar os criativos da proxima semana',
+      ]),
+    ],
+    fechamento: [
+      buildChecklist('Fechamento e preparacao (toque 3 de 3)', [
+        'Revisao geral das contas antes do fim de semana',
+        'Garantir que os clientes de fim de semana (bar e restaurante) estao no ar e com saldo pra aguentar sabado e domingo sozinhos',
+        'Conferir que nenhuma campanha vai parar por saldo ou cartao',
+        'Enviar a mensagem de fechamento no grupo do cliente',
+        'Anotar os aprendizados da semana',
+      ]),
+    ],
+    otimizacao_mensal: [
+      buildChecklist('Meta Ads', [
+        'Auditar campanhas ativas',
+        'Revisar ativos desatualizados',
+        'Verificar publicos com baixa performance',
+        'Analisar criativos com baixo CTR',
+        'Revisar orcamentos e distribuicao',
+        'Atualizar horarios de veiculacao',
+        'Verificar configuracoes de pixel',
+      ]),
+      buildChecklist('Google Ads', [
+        'Auditar campanhas ativas',
+        'Revisar palavras-chave negativas',
+        'Verificar termos de pesquisa',
+        'Analisar grupos de anuncios com baixa performance',
+        'Revisar lances e orcamentos',
+        'Atualizar extensoes de anuncios',
+        'Verificar configuracoes de conversao',
+        'Revisar publicos-alvo',
+      ]),
+    ],
+    avaliacao_cliente: [
+      buildChecklist('Avaliacao de cliente', [
+        'Revisar o historico de resultado do cliente nos ultimos 30 a 90 dias',
+        'Avaliar se a estrutura de conta ainda faz sentido pro momento do cliente',
+        'Revisar a oferta e os criativos contra o que a concorrencia esta rodando',
+        'Checar a saude do funil inteiro, do anuncio ate a conversao',
+        'Avaliar a relacao com o cliente (satisfeito, neutro ou em risco de sair)',
+        'Definir o plano dos proximos 30 dias pra essa conta',
+        'Separar os insights pra levar na proxima reuniao',
+      ]),
+    ],
+  };
+  return checklists[type] || [];
 }
 
 async function createTaskIfMissing(payload) {
