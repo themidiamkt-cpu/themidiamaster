@@ -492,6 +492,14 @@ function sortByCreatedAtDesc(a, b) {
   return String(b.created_at || '').localeCompare(String(a.created_at || ''));
 }
 
+function sortLeadsByLatestInteraction(a, b) {
+  const left = String(a.ultima_interacao || a.updated_at || a.created_at || '');
+  const right = String(b.ultima_interacao || b.updated_at || b.created_at || '');
+  const dateCompare = right.localeCompare(left);
+  if (dateCompare) return dateCompare;
+  return String(a.nome_empresa || '').localeCompare(String(b.nome_empresa || ''), 'pt-BR');
+}
+
 function sortByReceivedAtDesc(a, b) {
   return String(b.received_at || b.created_at || '').localeCompare(String(a.received_at || a.created_at || ''));
 }
@@ -1659,7 +1667,7 @@ function renderCrm() {
     ? state.leads.filter((lead) => getLeadSearchText(lead).includes(searchTerm))
     : state.leads;
   const kanban = crmStages.map((stage) => {
-    const leads = filteredLeads.filter((lead) => lead.etapa === stage);
+    const leads = filteredLeads.filter((lead) => lead.etapa === stage).sort(sortLeadsByLatestInteraction);
     const stageValue = leads.reduce((sum, lead) => sum + Number(lead.investimento_disponivel || lead.ticket_medio || 0), 0);
     return `
       <section class="kanban-column crm-stage-${stage}">
