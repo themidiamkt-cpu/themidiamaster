@@ -2214,7 +2214,16 @@ function firstFilled(...values) {
 }
 
 function normalizeDigits(value) {
-  return String(value || '').replace(/\D/g, '');
+  const clean = String(value || '').trim().split('@')[0].split(':')[0];
+  const digits = clean.replace(/\D/g, '');
+  if (!digits) return '';
+  if (digits.startsWith('55')) {
+    const national = digits.slice(2);
+    if (national.length === 10 && /^[6-9]/.test(national.slice(2))) {
+      return `55${national.slice(0, 2)}9${national.slice(2)}`;
+    }
+  }
+  return digits;
 }
 
 function formatLeadPhone(value) {

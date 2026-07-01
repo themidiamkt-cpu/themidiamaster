@@ -287,9 +287,18 @@ function sanitizeLeadName(value: unknown) {
 }
 
 function normalizePhone(value: unknown) {
-  const digits = String(value || '').replace(/\D/g, '');
+  const clean = String(value || '').trim().split('@')[0].split(':')[0];
+  const digits = clean.replace(/\D/g, '');
   if (!digits) return null;
-  return digits.length > 13 ? digits.slice(0, 13) : digits;
+  return normalizeBrazilMobilePhone(digits.length > 13 ? digits.slice(0, 13) : digits);
+}
+
+function normalizeBrazilMobilePhone(digits: string) {
+  const national = digits.startsWith('55') ? digits.slice(2) : digits;
+  if (digits.startsWith('55') && national.length === 10 && /^[6-9]/.test(national.slice(2))) {
+    return `55${national.slice(0, 2)}9${national.slice(2)}`;
+  }
+  return digits;
 }
 
 function phoneVariants(value: unknown) {
