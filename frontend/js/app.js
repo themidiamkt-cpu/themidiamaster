@@ -2463,6 +2463,7 @@ function renderMetaReport(report) {
         ${metaKpi('CPM medio', money(report.totals.cpm), '', true, metaComparison(report.totals.cpm, report.previous?.totals?.cpm || 0, money, true))}
         ${metaKpi(report.goal.costLabel, money(report.totals.custo_por_resultado), '', true, metaComparison(report.totals.custo_por_resultado, report.previous?.totals?.custo_por_resultado || 0, money, true))}
       </div>
+      ${renderMetaReportSales(report)}
       <div class="meta-toolbar">
         <div class="meta-tabs">
           <button class="${state.metaAds.viewMode === 'cards' ? 'active' : ''}" data-action="meta-view-mode" data-mode="cards">Cards</button>
@@ -2480,6 +2481,79 @@ function renderMetaReport(report) {
     </section>
     ${renderGoogleAdsSection()}
   `;
+}
+
+function getMetaReportSales(report) {
+  return state.vendas
+    .filter((venda) =>
+      venda.cliente_id === report.cliente.id &&
+      isDateInRange(venda.data_venda, report.since, report.until)
+    )
+    .sort((a, b) => String(b.data_venda || '').localeCompare(String(a.data_venda || '')));
+}
+
+function renderMetaReportSales(report) {
+  if (state.vendasMissingTable) return '';
+  const vendas = getMetaReportSales(report);
+  const totalRevenue = sumBy(vendas, 'valor_total');
+  const totalSales = sumBy(vendas, 'quantidade_vendas');
+  const totalProducts = sumBy(vendas, 'quantidade_produtos');
+  const averageTicket = ratio(totalRevenue, totalSales);
+  const salesRoas = ratio(totalRevenue, report.totals.investimento);
+  const totalMessages = report.goalKey === 'mensagens' ? report.totals.resultados : report.totals.mensagens;
+  const messageToSaleConversion = percent(totalSales, totalMessages);
+
+  return `
+    <section class="meta-sales-panel">
+      <div class="meta-sales-header">
+        <div>
+          <span>Vendas registradas</span>
+          <strong>${escapeHtml(report.cliente.nome_empresa)}</strong>
+        </div>
+        <small>${escapeHtml(date(report.since))} ate ${escapeHtml(date(report.until))}</small>
+      </div>
+      <div class="meta-sales-summary">
+        ${metaSalesMetric('Valor de vendas', money(totalRevenue))}
+        ${metaSalesMetric('Vendas', number(totalSales))}
+        ${metaSalesMetric('Produtos', number(totalProducts))}
+        ${metaSalesMetric('Ticket medio', money(averageTicket))}
+        ${metaSalesMetric('ROAS vendas', `${salesRoas.toFixed(2)}x`)}
+        ${metaSalesMetric('Conversao msg > vendas', messageToSaleConversion)}
+      </div>
+      ${vendas.length ? `
+        <div class="table-wrap meta-sales-table">
+          <table>
+            <thead>
+              <tr>
+                <th>Data</th>
+                <th>Origem</th>
+                <th>Faturamento</th>
+                <th>Vendas</th>
+                <th>Produtos</th>
+                <th>Ticket medio</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${vendas.map((venda) => `
+                <tr>
+                  <td>${date(venda.data_venda)}</td>
+                  <td>${escapeHtml(venda.origem || 'Manual')}</td>
+                  <td>${money(venda.valor_total)}</td>
+                  <td>${number(venda.quantidade_vendas)}</td>
+                  <td>${number(venda.quantidade_produtos)}</td>
+                  <td>${money(venda.ticket_medio || ratio(venda.valor_total, venda.quantidade_vendas))}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      ` : `<div class="meta-sales-empty">Nenhuma venda registrada para este cliente no periodo selecionado.</div>`}
+    </section>
+  `;
+}
+
+function metaSalesMetric(labelText, value) {
+  return `<div><span>${escapeHtml(labelText)}</span><strong>${escapeHtml(value)}</strong></div>`;
 }
 
 function renderMetaReportBody(report) {
