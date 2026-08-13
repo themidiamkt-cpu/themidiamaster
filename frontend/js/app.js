@@ -3836,35 +3836,46 @@ function getDiaryRowsByDate(selectedDate) {
 
 function renderDiarioCard(item) {
   const selected = state.diarioSelectedClienteId === item.cliente_id;
+  const hasAdminComment = Boolean((item.comentario_admin || '').trim());
   return `
     <article class="diary-card ${selected ? 'selected' : ''}" data-action="diary-select" data-client="${item.cliente_id}">
-      <div class="diary-card-top">
-        <div>
-          <h3>${escapeHtml(item.clientes?.nome_empresa || getClienteName(item.cliente_id) || 'Sem cliente')}</h3>
-          <p>${escapeHtml(item.autor || 'Nicolas')} - ${item.revisao_verba_ok ? 'Revisao de verba e performance OK' : 'Revisao pendente'}</p>
+      <div class="diary-doc-row">
+        <div class="diary-doc-main">
+          <div class="diary-card-top">
+            <div>
+              <h3>${escapeHtml(item.clientes?.nome_empresa || getClienteName(item.cliente_id) || 'Sem cliente')}</h3>
+              <p>${escapeHtml(item.autor || 'Nicolas')} - ${item.revisao_verba_ok ? 'Revisao de verba e performance OK' : 'Revisao pendente'}</p>
+            </div>
+            ${statusBadge(item.status || 'aberto')}
+          </div>
+          <label class="diary-doc-note">
+            <span>Anotacoes do gestor de trafego</span>
+            <textarea data-action="diary-field" data-field="anotacoes" data-id="${item.id}" data-client="${item.cliente_id}" placeholder="Escreva os pontos do dia como em um documento...">${escapeHtml(item.anotacoes || '')}</textarea>
+          </label>
+          <label class="diary-check">
+            <input type="checkbox" data-action="diary-ok" data-id="${item.id}" data-client="${item.cliente_id}" ${item.revisao_verba_ok ? 'checked' : ''}>
+            Revisao diaria de verba e performance OK
+          </label>
+          ${selected ? `
+            <div class="diary-context-actions">
+              <button class="button" data-action="diary-to-task" data-id="${item.id}" data-client="${item.cliente_id}"><i data-lucide="check-square"></i>Adicionar tarefa</button>
+              <button class="secondary-button" data-action="diary-to-observation" data-id="${item.id}" data-client="${item.cliente_id}"><i data-lucide="message-square-plus"></i>Salvar em observacoes</button>
+            </div>
+          ` : ''}
         </div>
-        ${statusBadge(item.status || 'aberto')}
-      </div>
-      <div class="diary-doc-fields">
-        <label>
-          <span>Observacoes do gestor de trafego</span>
-          <textarea data-action="diary-field" data-field="anotacoes" data-id="${item.id}" data-client="${item.cliente_id}">${escapeHtml(item.anotacoes || '')}</textarea>
-        </label>
-        <label>
-          <span>Observacoes do head de trafego</span>
-          <textarea data-action="diary-field" data-field="comentario_admin" data-id="${item.id}" data-client="${item.cliente_id}" placeholder="Seu comentario interno, ajuste ou direcionamento...">${escapeHtml(item.comentario_admin || '')}</textarea>
-        </label>
-      </div>
-      <label class="diary-check">
-        <input type="checkbox" data-action="diary-ok" data-id="${item.id}" data-client="${item.cliente_id}" ${item.revisao_verba_ok ? 'checked' : ''}>
-        Revisao diaria de verba e performance OK
-      </label>
-      ${selected ? `
-        <div class="diary-context-actions">
-          <button class="button" data-action="diary-to-task" data-id="${item.id}" data-client="${item.cliente_id}"><i data-lucide="check-square"></i>Adicionar tarefa</button>
-          <button class="secondary-button" data-action="diary-to-observation" data-id="${item.id}" data-client="${item.cliente_id}"><i data-lucide="message-square-plus"></i>Salvar em observacoes</button>
+        <div class="diary-comment-rail ${hasAdminComment ? 'has-comment' : ''}">
+          <div class="diary-comment-card">
+            <div class="diary-comment-author">
+              <span>RM</span>
+              <div>
+                <strong>Roberto Moura</strong>
+                <small>Comentário do head</small>
+              </div>
+            </div>
+            <textarea data-action="diary-field" data-field="comentario_admin" data-id="${item.id}" data-client="${item.cliente_id}" placeholder="Adicionar comentario...">${escapeHtml(item.comentario_admin || '')}</textarea>
+          </div>
         </div>
-      ` : ''}
+      </div>
     </article>
   `;
 }
