@@ -534,6 +534,46 @@ function isTrafficManager() {
   return getUserRole() === 'gestor_trafego';
 }
 
+function normalizePersonName(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+function titleNameFromEmail(email) {
+  const local = String(email || '').split('@')[0] || '';
+  const firstName = local.split(/[._-]/).find(Boolean) || local;
+  if (!firstName) return '';
+  return firstName.charAt(0).toUpperCase() + firstName.slice(1).toLowerCase();
+}
+
+function getCurrentUserNameCandidates() {
+  const user = state.session?.user || {};
+  const metadata = { ...(user.user_metadata || {}), ...(user.app_metadata || {}) };
+  return [
+    metadata.nome,
+    metadata.name,
+    metadata.full_name,
+    metadata.nome_completo,
+    titleNameFromEmail(user.email),
+    user.email,
+  ].map(normalizePersonName).filter(Boolean);
+}
+
+function getClienteOwnerName(cliente) {
+  return cliente?.responsavel_interno || cliente?.responsavel || cliente?.gestor || '';
+}
+
+function isClienteVisibleInDiary(cliente) {
+  if (isMainAdmin() || !isTrafficManager()) return true;
+  const owner = normalizePersonName(getClienteOwnerName(cliente));
+  if (!owner) return false;
+  return getCurrentUserNameCandidates().some((name) => owner === name || owner.includes(name) || name.includes(owner));
+}
+
 function getAllowedViews() {
   if (isMainAdmin()) return adminViews;
   if (isTrafficManager()) return trafficManagerViews;
@@ -3765,65 +3805,89 @@ function taskDuePill(value, status) {
 
 function renderDiario() {
   const today = isoDate(new Date());
-  const selectedDate = state.diarioDate || today;
-  const activeClientes = state.clientes.filter((cliente) => cliente.status === 'ativo');
-  const diaryEntries = getDiaryRowsByDate(selectedDate);
-  const doneCount = diaryEntries.filter((item) => !item.isVirtual).length;
+  const activeClientes = getDiaryActiveClientes();
+  const diarySections = getDiarySections(today);
+  const filledEntries = getVisibleDiaryEntries().filter((item) => Boolean(item.data_registro));
+  const taskCount = filledEntries.filter((item) => item.status === 'tarefa_criada').length;
 
   return `
-    ${pageHeader('Diário de Bordo', 'Folha diária dos clientes ativos, com anotações do gestor e comentários do head de tráfego.', `<button class="secondary-button" data-action="export" data-entity="diario"><i data-lucide="download"></i>CSV</button>`)}
+    ${pageHeader('Diário de Bordo', 'Folha dos clientes ativos em sequência, com anotações do gestor e comentários do head de tráfego.', `<button class="secondary-button" data-action="export" data-entity="diario"><i data-lucide="download"></i>CSV</button>`)}
     ${state.diarioMissingTable ? `
       <section class="panel warning-panel">
         <strong>Tabela do Diario de Bordo ainda nao existe no Supabase</strong>
         <p>Execute o SQL em <code>supabase/migrations/20260606_diario_bordo.sql</code>. A tela pode ser visualizada, mas ainda nao vai salvar anotacoes.</p>
       </section>
     ` : ''}
-    <section class="diary-date-panel panel">
-      <label>Ver anotações do dia
-        <input class="input" type="date" data-action="diary-date" value="${escapeHtml(selectedDate)}">
-      </label>
-      <button class="secondary-button" data-action="diary-today" type="button"><i data-lucide="calendar-days"></i>Hoje</button>
-    </section>
     <section class="diary-quick panel">
       <div>
-        <span>Data selecionada</span>
-        <strong>${date(selectedDate)}</strong>
+        <span>Dias visiveis</span>
+        <strong>${diarySections.length}</strong>
       </div>
       <div>
         <span>Clientes ativos</span>
         <strong>${activeClientes.length}</strong>
       </div>
       <div>
-        <span>Preenchidos no dia</span>
-        <strong>${doneCount}</strong>
+        <span>Registros preenchidos</span>
+        <strong>${filledEntries.length}</strong>
       </div>
       <div>
         <span>Tarefas criadas</span>
-        <strong>${diaryEntries.filter((item) => item.status === 'tarefa_criada').length}</strong>
+        <strong>${taskCount}</strong>
       </div>
     </section>
     <section class="diary-doc">
       <header class="diary-doc-header">
-        <h2>${date(selectedDate)}</h2>
+        <h2>Diário de Bordo</h2>
         <p>Diario de bordo operacional</p>
       </header>
       <div class="diary-doc-list">
-        ${diaryEntries.map(renderDiarioCard).join('') || emptyState('Nenhum cliente ativo', 'Cadastre ou ative clientes para montar o diario automaticamente.')}
+        ${diarySections.map(renderDiarioSection).join('') || emptyState('Nenhum cliente ativo', 'Cadastre ou ative clientes para montar o diario automaticamente.')}
       </div>
     </section>
   `;
 }
 
+function getDiarySections(today = isoDate(new Date())) {
+  const visibleDiaryEntries = getVisibleDiaryEntries();
+  const dates = new Set([today]);
+  visibleDiaryEntries.forEach((item) => {
+    if (item.data_registro) dates.add(item.data_registro);
+  });
+
+  return Array.from(dates)
+    .sort((a, b) => String(b).localeCompare(String(a)))
+    .map((entryDate) => ({
+      date: entryDate,
+      rows: getDiaryRowsByDate(entryDate),
+    }));
+}
+
 function getDiaryRowsByDate(selectedDate) {
-  const activeClientes = state.clientes.filter((cliente) => cliente.status === 'ativo');
-  return activeClientes.map((cliente) => {
+  const activeClientes = getDiaryActiveClientes();
+  const entriesForDate = getVisibleDiaryEntries().filter((item) => item.data_registro === selectedDate);
+  const clientesById = new Map(activeClientes.map((cliente) => [cliente.id, cliente]));
+
+  entriesForDate.forEach((entry) => {
+    if (!entry.cliente_id || clientesById.has(entry.cliente_id)) return;
+    const cliente = state.clientes.find((item) => item.id === entry.cliente_id);
+    const fallbackCliente = cliente || {
+      id: entry.cliente_id,
+      nome_empresa: entry.clientes?.nome_empresa || getClienteName(entry.cliente_id) || 'Sem cliente',
+    };
+    if (!isClienteVisibleInDiary(fallbackCliente)) return;
+    clientesById.set(entry.cliente_id, fallbackCliente);
+  });
+
+  return Array.from(clientesById.values()).map((cliente) => {
     const entry = state.diarios.find((item) => item.cliente_id === cliente.id && item.data_registro === selectedDate);
     return {
       id: entry?.id || '',
       cliente_id: cliente.id,
       clientes: { nome_empresa: cliente.nome_empresa },
       data_registro: selectedDate,
-      autor: entry?.autor || 'Nicolas',
+      autor: entry?.autor || '',
+      responsavel: getClienteOwnerName(cliente),
       revisao_verba_ok: entry?.revisao_verba_ok ?? false,
       anotacoes: entry?.anotacoes || '',
       comentario_admin: entry?.comentario_admin || '',
@@ -3832,6 +3896,38 @@ function getDiaryRowsByDate(selectedDate) {
       isVirtual: !entry,
     };
   });
+}
+
+function getDiaryActiveClientes() {
+  return state.clientes
+    .filter((cliente) => cliente.status === 'ativo')
+    .filter(isClienteVisibleInDiary);
+}
+
+function getVisibleDiaryEntries() {
+  return state.diarios.filter((entry) => {
+    if (!entry.cliente_id) return false;
+    const cliente = state.clientes.find((item) => item.id === entry.cliente_id) || {
+      id: entry.cliente_id,
+      nome_empresa: entry.clientes?.nome_empresa || getClienteName(entry.cliente_id) || 'Sem cliente',
+    };
+    return isClienteVisibleInDiary(cliente);
+  });
+}
+
+function renderDiarioSection(section) {
+  const filledCount = section.rows.filter((item) => !item.isVirtual).length;
+  return `
+    <section class="diary-day-section">
+      <div class="diary-section-header">
+        <h3>${date(section.date)}</h3>
+        <span>${filledCount} de ${section.rows.length} preenchidos</span>
+      </div>
+      <div class="diary-section-list">
+        ${section.rows.map(renderDiarioCard).join('')}
+      </div>
+    </section>
+  `;
 }
 
 function renderDiarioCard(item) {
@@ -3844,22 +3940,22 @@ function renderDiarioCard(item) {
           <div class="diary-card-top">
             <div>
               <h3>${escapeHtml(item.clientes?.nome_empresa || getClienteName(item.cliente_id) || 'Sem cliente')}</h3>
-              <p>${escapeHtml(item.autor || 'Nicolas')} - ${item.revisao_verba_ok ? 'Revisao de verba e performance OK' : 'Revisao pendente'}</p>
+              <p>${escapeHtml(item.autor || item.responsavel || 'Sem responsavel')} - ${item.revisao_verba_ok ? 'Revisao de verba e performance OK' : 'Revisao pendente'}</p>
             </div>
             ${statusBadge(item.status || 'aberto')}
           </div>
           <label class="diary-doc-note">
             <span>Anotacoes do gestor de trafego</span>
-            <textarea data-action="diary-field" data-field="anotacoes" data-id="${item.id}" data-client="${item.cliente_id}" placeholder="Escreva os pontos do dia como em um documento...">${escapeHtml(item.anotacoes || '')}</textarea>
+            <textarea data-action="diary-field" data-field="anotacoes" data-id="${item.id}" data-client="${item.cliente_id}" data-date="${escapeHtml(item.data_registro)}" placeholder="Escreva os pontos do dia como em um documento...">${escapeHtml(item.anotacoes || '')}</textarea>
           </label>
           <label class="diary-check">
-            <input type="checkbox" data-action="diary-ok" data-id="${item.id}" data-client="${item.cliente_id}" ${item.revisao_verba_ok ? 'checked' : ''}>
+            <input type="checkbox" data-action="diary-ok" data-id="${item.id}" data-client="${item.cliente_id}" data-date="${escapeHtml(item.data_registro)}" ${item.revisao_verba_ok ? 'checked' : ''}>
             Revisao diaria de verba e performance OK
           </label>
           ${selected ? `
             <div class="diary-context-actions">
-              <button class="button" data-action="diary-to-task" data-id="${item.id}" data-client="${item.cliente_id}"><i data-lucide="check-square"></i>Adicionar tarefa</button>
-              <button class="secondary-button" data-action="diary-to-observation" data-id="${item.id}" data-client="${item.cliente_id}"><i data-lucide="message-square-plus"></i>Salvar em observacoes</button>
+              <button class="button" data-action="diary-to-task" data-id="${item.id}" data-client="${item.cliente_id}" data-date="${escapeHtml(item.data_registro)}"><i data-lucide="check-square"></i>Adicionar tarefa</button>
+              <button class="secondary-button" data-action="diary-to-observation" data-id="${item.id}" data-client="${item.cliente_id}" data-date="${escapeHtml(item.data_registro)}"><i data-lucide="message-square-plus"></i>Salvar em observacoes</button>
             </div>
           ` : ''}
         </div>
@@ -3871,8 +3967,9 @@ function renderDiarioCard(item) {
                 <strong>Roberto Moura</strong>
                 <small>Comentário do head</small>
               </div>
+              <button class="icon-button diary-comment-open" type="button" data-action="diary-comment-popup" data-id="${item.id}" data-client="${item.cliente_id}" data-date="${escapeHtml(item.data_registro)}" title="Abrir comentário em popup" aria-label="Abrir comentário em popup"><i data-lucide="maximize-2"></i></button>
             </div>
-            <textarea data-action="diary-field" data-field="comentario_admin" data-id="${item.id}" data-client="${item.cliente_id}" placeholder="Adicionar comentario...">${escapeHtml(item.comentario_admin || '')}</textarea>
+            <textarea data-action="diary-field" data-field="comentario_admin" data-id="${item.id}" data-client="${item.cliente_id}" data-date="${escapeHtml(item.data_registro)}" placeholder="Adicionar comentario...">${escapeHtml(item.comentario_admin || '')}</textarea>
           </div>
         </div>
       </div>
@@ -4344,10 +4441,11 @@ function bindGlobalActions() {
       state.diarioSelectedClienteId = null;
       render();
     });
-    if (action === 'diary-field') el.addEventListener('blur', () => saveDiaryField(el.dataset.client, el.dataset.id, { [el.dataset.field]: el.value }));
-    if (action === 'diary-ok') el.addEventListener('change', () => saveDiaryField(el.dataset.client, el.dataset.id, { revisao_verba_ok: el.checked }));
-    if (action === 'diary-to-task') el.addEventListener('click', () => createTaskFromDiary(el.dataset.id, el.dataset.client));
-    if (action === 'diary-to-observation') el.addEventListener('click', () => createObservationFromDiary(el.dataset.id, el.dataset.client));
+    if (action === 'diary-field') el.addEventListener('blur', () => saveDiaryField(el.dataset.client, el.dataset.id, el.dataset.date, { [el.dataset.field]: el.value }));
+    if (action === 'diary-ok') el.addEventListener('change', () => saveDiaryField(el.dataset.client, el.dataset.id, el.dataset.date, { revisao_verba_ok: el.checked }));
+    if (action === 'diary-to-task') el.addEventListener('click', () => createTaskFromDiary(el.dataset.id, el.dataset.client, el.dataset.date));
+    if (action === 'diary-to-observation') el.addEventListener('click', () => createObservationFromDiary(el.dataset.id, el.dataset.client, el.dataset.date));
+    if (action === 'diary-comment-popup') el.addEventListener('click', () => openDiaryCommentPopup(el.dataset.id, el.dataset.client, el.dataset.date));
     if (action === 'meta-cell-edit') el.addEventListener('change', async () => {
       const id = el.dataset.id;
       const field = el.dataset.field;
@@ -5482,9 +5580,9 @@ async function updateOnboarding(id, payload) {
   }
 }
 
-async function saveDiaryField(clienteId, id, patch) {
+async function saveDiaryField(clienteId, id, entryDate, patch) {
   try {
-    const diary = await upsertDiaryEntry(clienteId, id, patch);
+    const diary = await upsertDiaryEntry(clienteId, id, entryDate, patch);
     const index = state.diarios.findIndex((item) => item.id === diary.id);
     if (index >= 0) state.diarios[index] = { ...state.diarios[index], ...diary };
     else state.diarios.push(diary);
@@ -5499,10 +5597,43 @@ async function saveDiaryField(clienteId, id, patch) {
   }
 }
 
-async function upsertDiaryEntry(clienteId, id, patch = {}) {
-  const selectedDate = state.diarioDate || isoDate(new Date());
+function openDiaryCommentPopup(id, clienteId, entryDate) {
+  const current = id
+    ? state.diarios.find((item) => item.id === id)
+    : state.diarios.find((item) => item.cliente_id === clienteId && item.data_registro === entryDate);
+  const clienteName = current?.clientes?.nome_empresa || getClienteName(clienteId) || 'Cliente';
+  const inlineValue = document.querySelector(`[data-action="diary-field"][data-field="comentario_admin"][data-client="${clienteId}"][data-date="${entryDate}"]`)?.value || '';
+
+  modalEyebrow.textContent = `Diario de bordo - ${date(entryDate)}`;
+  modalTitle.textContent = clienteName;
+  modalForm.innerHTML = `
+    <div class="diary-comment-popup">
+      <label>Comentário do head
+        <textarea name="comentario_admin" placeholder="Adicionar comentario...">${escapeHtml(current?.comentario_admin || inlineValue)}</textarea>
+      </label>
+      <div class="form-actions">
+        <button type="button" class="secondary-button" data-modal-cancel>Cancelar</button>
+        <button class="button" type="submit"><i data-lucide="save"></i>Salvar comentário</button>
+      </div>
+    </div>
+  `;
+  modalBackdrop.hidden = false;
+  modalForm.querySelector('[data-modal-cancel]')?.addEventListener('click', closeModal);
+  modalForm.onsubmit = async (event) => {
+    event.preventDefault();
+    const value = new FormData(event.target).get('comentario_admin') || '';
+    await saveDiaryField(clienteId, id, entryDate, { comentario_admin: value });
+    closeModal();
+    render();
+    toast('Comentário salvo.');
+  };
+  renderLucide();
+}
+
+async function upsertDiaryEntry(clienteId, id, entryDate, patch = {}) {
+  const selectedDate = entryDate || state.diarioDate || isoDate(new Date());
   const current = id ? state.diarios.find((item) => item.id === id) : state.diarios.find((item) => item.cliente_id === clienteId && item.data_registro === selectedDate);
-  const draft = getDiaryDraftFromDom(clienteId);
+  const draft = getDiaryDraftFromDom(clienteId, selectedDate);
   const payload = {
     cliente_id: clienteId || null,
     data_registro: selectedDate,
@@ -5518,9 +5649,10 @@ async function upsertDiaryEntry(clienteId, id, patch = {}) {
   return diarioBordoService.create(payload);
 }
 
-function getDiaryDraftFromDom(clienteId) {
-  const fieldSelector = (field) => `[data-action="diary-field"][data-client="${clienteId}"][data-field="${field}"]`;
-  const okSelector = `[data-action="diary-ok"][data-client="${clienteId}"]`;
+function getDiaryDraftFromDom(clienteId, entryDate) {
+  const dateSelector = entryDate ? `[data-date="${entryDate}"]` : '';
+  const fieldSelector = (field) => `[data-action="diary-field"][data-client="${clienteId}"][data-field="${field}"]${dateSelector}`;
+  const okSelector = `[data-action="diary-ok"][data-client="${clienteId}"]${dateSelector}`;
   return {
     autor: state.session?.user?.email || 'Nicolas',
     anotacoes: document.querySelector(fieldSelector('anotacoes'))?.value || '',
@@ -5529,8 +5661,8 @@ function getDiaryDraftFromDom(clienteId) {
   };
 }
 
-async function createTaskFromDiary(id, clienteId) {
-  const diary = id ? state.diarios.find((item) => item.id === id) : await upsertDiaryEntry(clienteId, id);
+async function createTaskFromDiary(id, clienteId, entryDate) {
+  const diary = id ? state.diarios.find((item) => item.id === id) : await upsertDiaryEntry(clienteId, id, entryDate);
   if (!diary) return;
   const clienteName = diary.clientes?.nome_empresa || getClienteName(diary.cliente_id);
   const firstLine = (diary.anotacoes || '').split('\n').find(Boolean) || 'Acompanhar anotacao do diario';
@@ -5639,8 +5771,8 @@ function createTaskFromAlerta(alertaId) {
   renderLucide();
 }
 
-async function createObservationFromDiary(id, clienteId) {
-  const diary = id ? state.diarios.find((item) => item.id === id) : await upsertDiaryEntry(clienteId, id);
+async function createObservationFromDiary(id, clienteId, entryDate) {
+  const diary = id ? state.diarios.find((item) => item.id === id) : await upsertDiaryEntry(clienteId, id, entryDate);
   if (!diary) return;
   if (!diary.cliente_id) {
     toast('Vincule um cliente antes de salvar como observacao.', 'error');

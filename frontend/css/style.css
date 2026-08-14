@@ -3054,7 +3054,45 @@ label { display: grid; gap: 7px; color: var(--muted); font-size: 12px; font-weig
 
 .diary-doc-list {
   display: grid;
-  gap: 20px;
+  gap: 34px;
+}
+
+.diary-day-section {
+  display: grid;
+  gap: 16px;
+}
+
+.diary-section-header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 0;
+  border-bottom: 1px solid #e5e7eb;
+  background: rgba(255, 255, 255, 0.94);
+  backdrop-filter: blur(10px);
+}
+
+.diary-section-header h3 {
+  margin: 0;
+  color: #2563eb;
+  font-size: 22px;
+  font-weight: 900;
+}
+
+.diary-section-header span {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.diary-section-list {
+  display: grid;
+  gap: 0;
 }
 
 .diary-day-header {
@@ -3208,7 +3246,7 @@ label { display: grid; gap: 7px; color: var(--muted); font-size: 12px; font-weig
 
 .diary-comment-author {
   display: grid;
-  grid-template-columns: 34px minmax(0, 1fr);
+  grid-template-columns: 34px minmax(0, 1fr) 32px;
   gap: 10px;
   align-items: center;
   margin-bottom: 10px;
@@ -3258,6 +3296,41 @@ label { display: grid; gap: 7px; color: var(--muted); font-size: 12px; font-weig
 
 .diary-comment-card textarea:focus {
   box-shadow: none;
+}
+
+.diary-comment-open {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  color: #64748b;
+}
+
+.diary-comment-open:hover {
+  color: #1d4ed8;
+  background: #eaf1ff;
+}
+
+.diary-comment-open svg {
+  width: 15px;
+  height: 15px;
+}
+
+.diary-comment-popup {
+  display: grid;
+  gap: 16px;
+}
+
+.diary-comment-popup label {
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.diary-comment-popup textarea {
+  min-height: 260px;
+  color: #111827;
+  font-size: 16px;
+  line-height: 1.55;
 }
 
 .diary-note p {
