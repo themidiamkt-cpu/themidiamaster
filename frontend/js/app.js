@@ -6694,6 +6694,12 @@ async function fetchGbpReport() {
     if (data?.error) throw new Error(data.error);
     state.gbp.report = data;
   } catch (error) {
+    if (isGbpCredentialError(error)) {
+      state.gbp.error = formatGbpError(error);
+      state.gbp.loading = false;
+      render();
+      return;
+    }
     try {
       toast('Edge Function indisponivel. Usando API local...', 'error');
       state.gbp.report = await fetchLocalGbpReport({
@@ -6705,6 +6711,12 @@ async function fetchGbpReport() {
         searchRadiusMeters: state.gbp.searchRadiusMeters,
       });
     } catch (localError) {
+      if (isGbpCredentialError(localError)) {
+        state.gbp.error = formatGbpError(localError);
+        state.gbp.loading = false;
+        render();
+        return;
+      }
       try {
         state.gbp.report = await analyzeGbpInBrowser({
           businessQuery: state.gbp.businessQuery,
@@ -6715,13 +6727,43 @@ async function fetchGbpReport() {
           searchRadiusMeters: state.gbp.searchRadiusMeters,
         });
       } catch (fallbackError) {
-        state.gbp.error = fallbackError.message || localError.message || error.message || 'Erro ao gerar diagnostico GMN.';
+        state.gbp.error = formatGbpError(fallbackError) || formatGbpError(localError) || formatGbpError(error) || 'Erro ao gerar diagnostico GMN.';
       }
     }
   } finally {
     state.gbp.loading = false;
     render();
   }
+}
+
+function formatGbpError(error) {
+  const message = String(error?.message || error?.error_description || error || '').trim();
+  const lower = message.toLowerCase();
+
+  if (lower.includes('billing') || lower.includes('faturamento')) {
+    return 'Google Maps API sem faturamento ativo. Ative o Billing no Google Cloud da chave usada em GOOGLE_MAPS_API_KEY e confira se Places API esta habilitada.';
+  }
+  if (lower.includes('request_denied') || lower.includes('recusou a chave')) {
+    return 'Google Places recusou a chave. Verifique se Places API esta habilitada, se o Billing esta ativo e se a chave permite este dominio/servidor.';
+  }
+  if (lower.includes('over_query_limit') || lower.includes('limite')) {
+    return 'Limite da Google Places API atingido. Verifique cota e faturamento no Google Cloud.';
+  }
+
+  return message;
+}
+
+function isGbpCredentialError(error) {
+  const message = formatGbpError(error).toLowerCase();
+  return [
+    'billing',
+    'faturamento',
+    'request_denied',
+    'recusou a chave',
+    'places api',
+    'google maps api sem',
+    'over_query_limit',
+  ].some((part) => message.includes(part));
 }
 
 async function fetchLocalGbpReport(payload) {

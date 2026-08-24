@@ -37,9 +37,32 @@ async function googleGet(path: string, params: Record<string, unknown>, apiKey: 
   const response = await fetch(url);
   const data = await response.json();
   if (!response.ok || (data.status && !['OK', 'ZERO_RESULTS'].includes(data.status))) {
-    throw new Error(data.error_message || data.status || `Google API error ${response.status}`);
+    throw new Error(formatGooglePlacesError(data, response.status));
   }
   return data;
+}
+
+function formatGooglePlacesError(data: any, httpStatus: number) {
+  const status = data?.status || '';
+  const message = data?.error_message || '';
+  const text = `${status} ${message}`.toLowerCase();
+
+  if (text.includes('billing')) {
+    return 'Google Maps API sem faturamento ativo. Ative o Billing no projeto do Google Cloud usado pela chave GOOGLE_MAPS_API_KEY.';
+  }
+  if (status === 'REQUEST_DENIED') {
+    return message
+      ? `Google Places recusou a chave: ${message}`
+      : 'Google Places recusou a chave. Verifique se Places API esta ativa e se a chave permite chamadas desse ambiente.';
+  }
+  if (status === 'OVER_QUERY_LIMIT') {
+    return 'Limite da Google Places API atingido. Verifique cota e faturamento no Google Cloud.';
+  }
+  if (status === 'INVALID_REQUEST') {
+    return 'Busca invalida para o Google Places. Revise nome/endereco/link do perfil.';
+  }
+
+  return message || status || `Google API error ${httpStatus}`;
 }
 
 async function analyzeGbp(payload: Record<string, any>, apiKey: string) {
