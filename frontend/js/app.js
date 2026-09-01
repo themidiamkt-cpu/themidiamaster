@@ -2504,6 +2504,7 @@ function renderMetaReport(report) {
         ${metaKpi(report.goal.costLabel, money(report.totals.custo_por_resultado), '', true, metaComparison(report.totals.custo_por_resultado, report.previous?.totals?.custo_por_resultado || 0, money, true))}
       </div>
       ${renderMetaReportSales(report)}
+      ${renderMetaWhatsappReportGenerator(report)}
       <div class="meta-toolbar">
         <div class="meta-tabs">
           <button class="${state.metaAds.viewMode === 'cards' ? 'active' : ''}" data-action="meta-view-mode" data-mode="cards">Cards</button>
@@ -2520,6 +2521,25 @@ function renderMetaReport(report) {
       </footer>
     </section>
     ${renderGoogleAdsSection()}
+  `;
+}
+
+function renderMetaWhatsappReportGenerator(report) {
+  const text = buildMetaWhatsappReport(report);
+  return `
+    <section class="meta-ai-report screen-only">
+      <div class="meta-ai-report-header">
+        <div>
+          <span>Relatório semanal automático</span>
+          <strong>Texto pronto para WhatsApp</strong>
+        </div>
+        <div class="row-actions">
+          <button class="secondary-button" data-action="meta-report-popup" type="button"><i data-lucide="maximize-2"></i>Abrir</button>
+          <button class="button" data-action="meta-report-copy" type="button"><i data-lucide="copy"></i>Copiar</button>
+        </div>
+      </div>
+      <pre>${escapeHtml(text)}</pre>
+    </section>
   `;
 }
 
@@ -2594,6 +2614,188 @@ function renderMetaReportSales(report) {
 
 function metaSalesMetric(labelText, value) {
   return `<div><span>${escapeHtml(labelText)}</span><strong>${escapeHtml(value)}</strong></div>`;
+}
+
+function buildMetaWhatsappReport(report) {
+  const context = getMetaBusinessContext(report);
+  const sales = getMetaReportSales(report);
+  const salesRevenue = sumBy(sales, 'valor_total');
+  const registeredSales = sumBy(sales, 'quantidade_vendas');
+  const revenue = salesRevenue || report.totals.faturamento || 0;
+  const salesCount = registeredSales || report.totals.vendas || 0;
+  const roas = ratio(revenue, report.totals.investimento);
+  const goalMetric = getMetaPrimaryMetric(report, salesCount, revenue, roas);
+  const previous = report.previous?.totals || null;
+  const previousGoalMetric = previous ? getMetaPrimaryMetric({ ...report, totals: previous }, 0, previous.faturamento || 0, ratio(previous.faturamento, previous.investimento)) : null;
+  const highlight = getMetaWeeklyHighlight(report);
+  const positives = buildMetaPositivePoints(report, goalMetric, previousGoalMetric, context, { revenue, salesCount, roas });
+  const improvements = buildMetaImprovementPoints(report, goalMetric, context, { revenue, salesCount, roas });
+
+  return [
+    `📊 RELATÓRIO SEMANAL – ${String(report.cliente.nome_empresa || 'CLIENTE').toUpperCase()}`,
+    '',
+    `Período: ${date(report.since)} a ${date(report.until)}`,
+    '',
+    '📈 Principais números',
+    '',
+    `• Investimento: ${formatMetricWithVariation(report.totals.investimento, previous?.investimento, money)}`,
+    `• ${goalMetric.label}: ${formatMetricWithVariation(goalMetric.value, previousGoalMetric?.value, goalMetric.formatter)}`,
+    `• ${goalMetric.costLabel}: ${formatMetricWithVariation(goalMetric.cost, previousGoalMetric?.cost, money)}`,
+    context === 'ecommerce' && revenue ? `• Faturamento: ${formatMetricWithVariation(revenue, previous?.faturamento, money)}` : null,
+    context === 'ecommerce' && roas ? `• ROAS: ${formatMetricWithVariation(roas, ratio(previous?.faturamento, previous?.investimento), (value) => `${Number(value || 0).toFixed(2)}x`)}` : null,
+    `• Alcance: ${formatMetricWithVariation(report.totals.alcance, previous?.alcance, number)}`,
+    `• Cliques: ${formatMetricWithVariation(report.totals.cliques, previous?.cliques, number)}`,
+    '',
+    '🏆 Destaque da semana',
+    '',
+    highlight,
+    '',
+    '✅ Pontos positivos',
+    '',
+    ...positives.map((item) => `• ${item}`),
+    '',
+    '⚠️ Pontos de melhoria',
+    '',
+    ...improvements.map((item) => `• ${item}`),
+    '',
+    '📌 Resumo',
+    '',
+    buildMetaExecutiveSummary(report, goalMetric, previousGoalMetric, context, { roas, revenue, salesCount }),
+  ].filter((line) => line != null).join('\n');
+}
+
+function getMetaBusinessContext(report) {
+  const text = `${report.goalKey || ''} ${report.cliente?.nome_empresa || ''} ${report.cliente?.segmento || ''} ${report.cliente?.observacoes || ''}`.toLowerCase();
+  if (report.goalKey === 'vendas' || text.includes('e-commerce') || text.includes('ecommerce') || text.includes('loja') || text.includes('vendas')) return 'ecommerce';
+  if (text.includes('restaurante') || text.includes('bar') || text.includes('delivery') || text.includes('reserva')) return 'restaurante';
+  if (report.goalKey === 'leads') return 'leads';
+  return 'mensagens';
+}
+
+function getMetaPrimaryMetric(report, salesCount = 0, revenue = 0, roas = 0) {
+  if (report.goalKey === 'vendas') {
+    return {
+      label: revenue ? 'Faturamento' : 'Vendas',
+      value: revenue || salesCount || report.totals.resultados,
+      cost: salesCount ? ratio(report.totals.investimento, salesCount) : report.totals.custo_por_resultado,
+      costLabel: salesCount ? 'Custo por venda' : report.goal.costLabel,
+      formatter: revenue ? money : number,
+      roas,
+    };
+  }
+  if (report.goalKey === 'leads') {
+    return { label: 'Leads', value: report.totals.resultados, cost: report.totals.custo_por_resultado, costLabel: 'Custo por lead', formatter: number };
+  }
+  if (report.goalKey === 'seguidores') {
+    return { label: 'Seguidores', value: report.totals.resultados, cost: report.totals.custo_por_resultado, costLabel: 'Custo por seguidor', formatter: number };
+  }
+  return { label: 'Mensagens', value: report.totals.resultados, cost: report.totals.custo_por_resultado, costLabel: 'Custo por mensagem', formatter: number };
+}
+
+function formatMetricWithVariation(current, previous, formatter = number) {
+  const currentValue = Number(current || 0);
+  const previousValue = Number(previous || 0);
+  const formatted = formatter(currentValue);
+  if (!previousValue) return formatted;
+  const variation = ((currentValue - previousValue) / previousValue) * 100;
+  if (!Number.isFinite(variation) || Math.abs(variation) < 0.1) return `${formatted} (estável)`;
+  return `${formatted} (${variation > 0 ? '↑' : '↓'} ${Math.abs(variation).toFixed(0)}%)`;
+}
+
+function getVariationPercent(current, previous) {
+  const previousValue = Number(previous || 0);
+  if (!previousValue) return null;
+  const variation = ((Number(current || 0) - previousValue) / previousValue) * 100;
+  return Number.isFinite(variation) ? variation : null;
+}
+
+function getMetaWeeklyHighlight(report) {
+  const rows = [...(report.rows || [])].filter((row) => Number(row.spend || 0) > 0);
+  if (!rows.length) return 'Não houve anúncio com investimento suficiente para definir um destaque da semana.';
+  const ranked = rows.sort((a, b) =>
+    Number(b.resultados || 0) - Number(a.resultados || 0) ||
+    ratio(a.spend, a.resultados || 0) - ratio(b.spend, b.resultados || 0) ||
+    Number(b.clicks || 0) - Number(a.clicks || 0)
+  );
+  const best = ranked[0];
+  const name = best.ad_name || best.campaign_name || 'principal anúncio';
+  const campaign = best.campaign_name && best.campaign_name !== name ? `, da campanha “${best.campaign_name}”` : '';
+  if (best.resultados) {
+    return `O criativo “${name}”${campaign}, foi o principal destaque, gerando ${number(best.resultados)} ${String(report.goal.metricLabel || 'resultados').toLowerCase()} com custo de ${money(ratio(best.spend, best.resultados))} por resultado.`;
+  }
+  return `O criativo “${name}”${campaign}, foi o principal destaque em atenção, com ${number(best.clicks)} cliques e investimento de ${money(best.spend)}.`;
+}
+
+function buildMetaPositivePoints(report, goalMetric, previousGoalMetric, context, salesData) {
+  const points = [];
+  const goalVariation = getVariationPercent(goalMetric.value, previousGoalMetric?.value);
+  const costVariation = getVariationPercent(goalMetric.cost, previousGoalMetric?.cost);
+  const reachVariation = getVariationPercent(report.totals.alcance, report.previous?.totals?.alcance);
+  const clicksVariation = getVariationPercent(report.totals.cliques, report.previous?.totals?.cliques);
+
+  if (goalVariation != null && goalVariation > 0) points.push(`Crescimento de ${goalVariation.toFixed(0)}% em ${goalMetric.label.toLowerCase()}.`);
+  if (costVariation != null && costVariation < 0) points.push(`Redução de ${Math.abs(costVariation).toFixed(0)}% no ${goalMetric.costLabel.toLowerCase()}.`);
+  if (context === 'ecommerce' && salesData.roas >= 1) points.push(`ROAS positivo de ${salesData.roas.toFixed(2)}x no período.`);
+  if (reachVariation != null && reachVariation > 0) points.push(`Aumento de ${reachVariation.toFixed(0)}% no alcance das campanhas.`);
+  if (clicksVariation != null && clicksVariation > 0) points.push(`Mais tráfego gerado, com crescimento de ${clicksVariation.toFixed(0)}% nos cliques.`);
+  if (report.totals.ctr >= 1) points.push(`CTR médio de ${report.totals.ctr.toFixed(2)}%, indicando boa taxa de interesse inicial.`);
+  if (goalMetric.value > 0) points.push(`${goalMetric.label} gerados com consistência no período analisado.`);
+
+  return fillUniquePoints(points, [
+    'As campanhas mantiveram presença ativa durante a semana.',
+    'O investimento trouxe volume mensurável de interação.',
+    'Há base de dados suficiente para orientar os próximos testes.',
+  ], 3);
+}
+
+function buildMetaImprovementPoints(report, goalMetric, context, salesData) {
+  const points = [];
+  if (!goalMetric.value) points.push(`Melhorar a geração de ${goalMetric.label.toLowerCase()} com novas ofertas e criativos.`);
+  if (goalMetric.value && report.totals.cliques > goalMetric.value * 8) points.push(`Melhorar a conversão dos cliques em novos contatos ou oportunidades.`);
+  if (report.totals.cpc > 1.5) points.push('Testar novos criativos para reduzir o custo por clique.');
+  if (report.totals.ctr < 1) points.push('Reforçar chamadas e criativos para aumentar a taxa de clique.');
+  if (context === 'restaurante') points.push('Acompanhar se as mensagens e cliques estão virando reservas, visitas ou pedidos.');
+  if (context === 'ecommerce' && salesData.roas < 2) points.push('Acompanhar conversão do site, ticket médio e recuperação de carrinho para elevar o ROAS.');
+  if (context === 'leads') points.push('Validar a qualidade dos leads e o retorno comercial dos contatos gerados.');
+  points.push('Criar novas variações do anúncio com melhor desempenho.');
+
+  return fillUniquePoints(points, [
+    'Acompanhar a qualidade dos resultados gerados na operação comercial.',
+    'Revisar segmentação e oferta antes de aumentar o investimento.',
+    'Manter testes semanais para encontrar novos criativos vencedores.',
+  ], 3);
+}
+
+function buildMetaExecutiveSummary(report, goalMetric, previousGoalMetric, context, salesData) {
+  const goalVariation = getVariationPercent(goalMetric.value, previousGoalMetric?.value);
+  const improved = goalVariation == null ? goalMetric.value > 0 : goalVariation >= 0;
+  const contextFocus = {
+    restaurante: 'transformar as interações em reservas, visitas e pedidos.',
+    ecommerce: 'melhorar conversão, faturamento e ROAS.',
+    leads: 'aumentar volume com qualidade comercial.',
+    mensagens: 'manter o volume de conversas e melhorar a conversão dos atendimentos.',
+  }[context] || 'melhorar a conversão dos resultados.';
+
+  if (context === 'ecommerce' && salesData.revenue) {
+    return `A semana gerou ${money(salesData.revenue)} em vendas registradas e ROAS de ${salesData.roas.toFixed(2)}x. O próximo foco será manter os anúncios mais eficientes e ${contextFocus}`;
+  }
+  if (improved) {
+    return `A semana apresentou desempenho positivo em ${goalMetric.label.toLowerCase()} e trouxe dados claros para otimização. O próximo foco será reforçar o que funcionou melhor e ${contextFocus}`;
+  }
+  return `A semana mostrou oportunidades de ajuste na geração de ${goalMetric.label.toLowerCase()}. O próximo foco será revisar criativos, oferta e segmentação para ${contextFocus}`;
+}
+
+function fillUniquePoints(points, fallback, limit = 3) {
+  const seen = new Set();
+  return [...points, ...fallback]
+    .map((item) => String(item || '').trim())
+    .filter((item) => {
+      const key = item.toLowerCase();
+      if (!item || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, limit);
 }
 
 function renderMetaReportBody(report) {
@@ -4410,6 +4612,8 @@ function bindGlobalActions() {
     if (action === 'meta-until') el.addEventListener('change', () => { setSharedMetaDateRange({ until: el.value }); state.metaAds.report = null; });
     if (action === 'meta-fetch') el.addEventListener('click', fetchMetaAdsReport);
     if (action === 'meta-save-report') el.addEventListener('click', saveMetaReport);
+    if (action === 'meta-report-copy') el.addEventListener('click', copyMetaWhatsappReport);
+    if (action === 'meta-report-popup') el.addEventListener('click', openMetaWhatsappReportPopup);
     if (action === 'meta-back') el.addEventListener('click', () => { state.metaAds.report = null; render(); });
     if (action === 'meta-tab') el.addEventListener('click', () => { state.metaAds.tab = el.dataset.tab || 'consulta'; render(); });
     if (action === 'meta-view-mode') el.addEventListener('click', () => { state.metaAds.viewMode = el.dataset.mode; render(); });
@@ -6619,6 +6823,67 @@ async function saveMetaReport() {
   } catch (error) {
     showError(error);
   }
+}
+
+async function copyMetaWhatsappReport() {
+  const report = state.metaAds.report;
+  if (!report) {
+    toast('Gere o relatorio antes de copiar.', 'error');
+    return;
+  }
+  try {
+    await copyText(buildMetaWhatsappReport(report));
+    toast('Relatorio semanal copiado.');
+  } catch (error) {
+    showError(error);
+  }
+}
+
+function openMetaWhatsappReportPopup() {
+  const report = state.metaAds.report;
+  if (!report) {
+    toast('Gere o relatorio antes de abrir.', 'error');
+    return;
+  }
+  const text = buildMetaWhatsappReport(report);
+  modalEyebrow.textContent = 'Relatorio semanal automatico';
+  modalTitle.textContent = report.cliente?.nome_empresa || 'Relatorio';
+  modalForm.innerHTML = `
+    <div class="meta-ai-report-modal">
+      <label>Texto para WhatsApp
+        <textarea name="weekly_report">${escapeHtml(text)}</textarea>
+      </label>
+      <div class="form-actions">
+        <button type="button" class="secondary-button" data-modal-cancel>Fechar</button>
+        <button type="button" class="button" data-weekly-copy><i data-lucide="copy"></i>Copiar texto</button>
+      </div>
+    </div>
+  `;
+  modalBackdrop.hidden = false;
+  modalForm.querySelector('[data-modal-cancel]')?.addEventListener('click', closeModal);
+  modalForm.querySelector('[data-weekly-copy]')?.addEventListener('click', async () => {
+    const value = modalForm.querySelector('[name="weekly_report"]')?.value || text;
+    await copyText(value);
+    toast('Relatorio semanal copiado.');
+  });
+  modalForm.onsubmit = (event) => event.preventDefault();
+  renderLucide();
+}
+
+async function copyText(text) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', '');
+  textarea.style.cssText = 'position:fixed;left:-9999px;top:-9999px;';
+  document.body.appendChild(textarea);
+  textarea.select();
+  const copied = document.execCommand('copy');
+  textarea.remove();
+  if (!copied) throw new Error('Nao foi possivel copiar automaticamente.');
 }
 
 async function saveGbpReport() {
