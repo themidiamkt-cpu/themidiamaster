@@ -2626,7 +2626,7 @@ function buildMetaWhatsappReport(report) {
   const roas = ratio(revenue, report.totals.investimento);
   const goalMetric = getMetaPrimaryMetric(report, salesCount, revenue, roas);
   const previous = report.previous?.totals || null;
-  const previousGoalMetric = previous ? getMetaPrimaryMetric({ ...report, totals: previous }, 0, previous.faturamento || 0, ratio(previous.faturamento, previous.investimento)) : null;
+  const previousGoalMetric = previous ? getMetaPrimaryMetric({ ...report, totals: previous }, previous.vendas || 0, previous.faturamento || 0, ratio(previous.faturamento, previous.investimento)) : null;
   const highlight = getMetaWeeklyHighlight(report);
   const positives = buildMetaPositivePoints(report, goalMetric, previousGoalMetric, context, { revenue, salesCount, roas });
   const improvements = buildMetaImprovementPoints(report, goalMetric, context, { revenue, salesCount, roas });
@@ -2674,12 +2674,13 @@ function getMetaBusinessContext(report) {
 
 function getMetaPrimaryMetric(report, salesCount = 0, revenue = 0, roas = 0) {
   if (report.goalKey === 'vendas') {
+    const totalSales = salesCount || report.totals.vendas || report.totals.resultados;
     return {
-      label: revenue ? 'Faturamento' : 'Vendas',
-      value: revenue || salesCount || report.totals.resultados,
-      cost: salesCount ? ratio(report.totals.investimento, salesCount) : report.totals.custo_por_resultado,
-      costLabel: salesCount ? 'Custo por venda' : report.goal.costLabel,
-      formatter: revenue ? money : number,
+      label: 'Vendas',
+      value: totalSales,
+      cost: totalSales ? ratio(report.totals.investimento, totalSales) : report.totals.custo_por_resultado,
+      costLabel: totalSales ? 'Custo por venda' : report.goal.costLabel,
+      formatter: number,
       roas,
     };
   }
