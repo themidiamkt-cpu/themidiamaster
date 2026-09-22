@@ -42,8 +42,9 @@ Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
 
   try {
+    if (req.method !== 'POST') return json({ ok: false, error: 'Metodo nao permitido.' }, 405);
+    if (!assertBackfillSecret(req)) return json({ ok: false, error: 'Cron nao autorizado.' }, 401);
     const payload = await safeJson(req);
-    assertBackfillSecret(req, payload);
 
     const token = Deno.env.get('META_ACCESS_TOKEN') || Deno.env.get('META_ADS_ACCESS_TOKEN');
     const supabaseUrl = Deno.env.get('SUPABASE_URL');
@@ -142,13 +143,13 @@ async function safeJson(req: Request) {
   }
 }
 
-function assertBackfillSecret(req: Request, payload: Record<string, any>) {
-  const mode = String(payload.mode || 'yesterday');
-  if (!['backfill', 'range'].includes(mode)) return;
-  const cronSecret = Deno.env.get('CRON_SECRET') || '';
-  if (!cronSecret) throw new Error('Configure CRON_SECRET para rodar backfill ou range manual.');
-  const provided = req.headers.get('x-cron-secret') || payload.cronSecret || '';
-  if (provided !== cronSecret) throw new Error('CRON_SECRET invalido.');
+function assertBackfillSecret(req: Request) {
+  const expected = Deno.env.get('CRON_SECRET') || '';
+  const supplied = req.headers.get('x-cron-secret') || '';
+  if (!expected || !supplied || expected.length !== supplied.length) return false;
+  let difference = 0;
+  for (let i = 0; i < expected.length; i++) difference |= expected.charCodeAt(i) ^ supplied.charCodeAt(i);
+  return difference === 0;
 }
 
 function resolveRange(payload: Record<string, any>) {

@@ -11,6 +11,17 @@ Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return json({ ok: true });
   if (req.method !== 'POST') return json({ ok: false, error: 'Metodo nao permitido.' }, 405);
 
+  const bearer = /^Bearer (.+)$/i.exec(req.headers.get('authorization') || '')?.[1];
+  if (!bearer) return json({ ok: false, error: 'Sessao obrigatoria.' }, 401);
+  const authUrl = Deno.env.get('SUPABASE_URL');
+  const anon = Deno.env.get('SUPABASE_ANON_KEY');
+  if (!authUrl || !anon) return json({ ok: false, error: 'Supabase nao configurado.' }, 503);
+  const caller = createClient(authUrl, anon, { global: { headers: { Authorization: `Bearer ${bearer}` } }, auth: { persistSession: false } });
+  const { data: { user }, error: authError } = await caller.auth.getUser(bearer);
+  if (authError || !user) return json({ ok: false, error: 'Sessao invalida.' }, 401);
+  const { data: adminAllowed, error: roleError } = await caller.rpc('is_main_admin');
+  if (roleError || !adminAllowed) return json({ ok: false, error: 'Acesso negado.' }, 403);
+
   const supabaseUrl = Deno.env.get('SUPABASE_URL');
   const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || Deno.env.get('SERVICE_ROLE_KEY');
   const token = Deno.env.get('META_ACCESS_TOKEN') || Deno.env.get('META_ADS_ACCESS_TOKEN');

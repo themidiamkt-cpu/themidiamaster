@@ -16,6 +16,8 @@ Deno.serve(async (req) => {
 
   try {
     const payload = await safeJson(req);
+    if (!validateSecret(req)) return response({ ok: false, error: 'Webhook nao autorizado.' }, 401);
+    delete payload.secret;
     await forwardIncomingPayload(req, payload);
 
     const supabaseUrl = Deno.env.get('SUPABASE_URL');
@@ -27,7 +29,6 @@ Deno.serve(async (req) => {
     });
     logId = await createWebhookLog(supabase, req, payload);
 
-    validateSecret(req, payload);
 
     const normalized = normalizeLeadPayload(payload);
     if (normalized.ignore) {
@@ -97,7 +98,7 @@ async function forwardIncomingPayload(req: Request, payload: Record<string, any>
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5000);
     const forwardedHeaders = Object.fromEntries(
-      Array.from(req.headers.entries()).filter(([key]) => !['authorization', 'apikey'].includes(key.toLowerCase()))
+      Array.from(req.headers.entries()).filter(([key]) => !['authorization', 'apikey', 'x-webhook-secret', 'cookie'].includes(key.toLowerCase()))
     );
     const res = await fetch(forwardWebhookUrl, {
       method: 'POST',
@@ -108,14 +109,14 @@ async function forwardIncomingPayload(req: Request, payload: Record<string, any>
         forwarded_at: new Date().toISOString(),
         request: {
           method: req.method,
-          url: req.url,
+          url: new URL(req.url).pathname,
           headers: forwardedHeaders,
         },
         payload,
       }),
     });
     clearTimeout(timeout);
-    if (!res.ok) console.error('crm forward webhook failed', res.status, await res.text());
+    if (!res.ok) console.error('crm forward webhook failed', res.status);
   } catch (error) {
     console.error('crm forward webhook error', error?.message || error);
   }
@@ -129,12 +130,13 @@ async function safeJson(req: Request) {
   }
 }
 
-function validateSecret(req: Request, payload: Record<string, any>) {
+function validateSecret(req: Request) {
   const configured = Deno.env.get('LEAD_WEBHOOK_SECRET') || '';
-  if (!configured) return;
-  const url = new URL(req.url);
-  const provided = req.headers.get('x-webhook-secret') || url.searchParams.get('secret') || payload.secret || '';
-  if (provided !== configured) throw new Error('Secret do webhook invalido.');
+  const provided = req.headers.get('x-webhook-secret') || '';
+  if (!configured || !provided || provided.length !== configured.length) return false;
+  let difference = 0;
+  for (let i = 0; i < configured.length; i++) difference |= configured.charCodeAt(i) ^ provided.charCodeAt(i);
+  return difference === 0;
 }
 
 async function createWebhookLog(supabase: any, req: Request, payload: Record<string, any>) {

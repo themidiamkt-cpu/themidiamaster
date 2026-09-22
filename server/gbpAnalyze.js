@@ -1,7 +1,6 @@
-const defaultGoogleMapsApiKey = 'AIzaSyAyH7teIp1Xjprln7TaA1i_dIY8TB0_HgE';
-
 export async function analyzeGbp(payload = {}) {
-  const apiKey = payload.apiKey || process.env.GOOGLE_MAPS_API_KEY || defaultGoogleMapsApiKey;
+  const apiKey = process.env.GOOGLE_MAPS_API_KEY;
+  if (!apiKey) throw new Error('GOOGLE_MAPS_API_KEY nao configurada.');
   const query = extractReadableQuery(String(payload.businessQuery || payload.gmnLink || '').trim()).trim();
   const keyword = String(payload.keyword || '').trim();
   if (!query) throw new Error('Informe o link, nome ou endereco do perfil.');

@@ -1,3 +1,4 @@
+import { aggregateClientMetrics, deriveReportMetrics, summarizeMetaRows as summarizeMetaRowsCore } from './metrics.js';
 import { ensureSession, isSupabaseConfigured, supabase } from './supabase.js';
 import { clienteService } from './services/clienteService.js';
 import { leadCrmService } from './services/leadCrmService.js';
@@ -25,16 +26,12 @@ const modalForm = document.getElementById('modalForm');
 const modalTitle = document.getElementById('modalTitle');
 const modalEyebrow = document.getElementById('modalEyebrow');
 const initialMetaDateRange = getDefaultDateRange();
-const fixedMetaAccessToken = 'EAAKJkRH2esoBRc0EFaZAkKc3TrzQZC6YZCmWP0tj4b7EdZBAaXL9NZCFtMUypWqZBjzMVRyOyzwh3ItVTs8bgyl16uFcIiWvDHB8GjxxcPWji6FC3NwTqqvnlrZBE3dFG2ZA7eNZBLGbtZCQHDZBx0SZAyHIS1dcSSPtQJNKuLmWC9JtmWhsCLOZCD3uZBAdmuZCEZA0rYzvCgZDZD';
-const fixedGoogleMapsApiKey = 'AIzaSyAyH7teIp1Xjprln7TaA1i_dIY8TB0_HgE';
 const whatsappWebhookUrl = 'https://automacao2.themidiamarketing.com.br/webhook/conectar-cliente';
 const mainAdminEmail = 'themidiamkt@gmail.com';
 const viewStorageKey = 'theMidiaMaster.activeView';
 const adminViews = ['dashboard', 'dashboardClientes', 'clientes', 'relatorios', 'crm', 'crmFollowups', 'metaAds', 'gbp', 'diario', 'tarefas', 'playbooks', 'equipe', 'metas', 'alertas', 'config'];
 const trafficManagerViews = ['dashboardClientes', 'clientes', 'metaAds', 'gbp', 'diario', 'tarefas', 'playbooks', 'metas', 'alertas'];
 const teamViews = trafficManagerViews;
-let googlePlacesLoader = null;
-let googlePlacesMap = null;
 
 const state = {
   view: getStoredView() || 'dashboard',
@@ -86,7 +83,7 @@ const state = {
     byClienteId: {},
   },
   metaAds: {
-    token: fixedMetaAccessToken,
+    token: '',
     since: initialMetaDateRange.since,
     until: initialMetaDateRange.until,
     clienteId: '',
@@ -979,7 +976,7 @@ function renderDashboard() {
   const followups = getDashboardFollowups();
 
   return `
-    ${pageHeader('Dashboard geral da agencia', 'Indicadores reais consolidados a partir do Supabase.', `<button class="button" data-action="refresh"><i data-lucide="refresh-cw"></i>Atualizar</button>`)}
+    ${pageHeader('Dashboard geral da agencia', 'Indicadores cadastrados e calculados a partir do Supabase; recebimentos não verificados.', `<button class="button" data-action="refresh"><i data-lucide="refresh-cw"></i>Atualizar</button>`)}
     <section class="dashboard-area">
       <div class="dashboard-area-header">
         <div>
@@ -998,13 +995,13 @@ function renderDashboard() {
     <section class="dashboard-area">
       <div class="dashboard-area-header">
         <div>
-          <span>Receita e midia</span>
+          <span>Contratos e midia</span>
           <h2>Financeiro</h2>
         </div>
-        <p>Contratos ativos e verba sob gestao</p>
+        <p>Mensalidades cadastradas e verba prevista sob gestao</p>
       </div>
       <div class="stats-grid compact">
-        ${statCard('Faturamento mensal', money(monthlyRevenue), 'wallet', 'gold')}
+        ${statCard('Receita mensal contratada', money(monthlyRevenue), 'wallet', 'gold')}
         ${statCard('Verba gerenciada', money(managedBudget), 'circle-dollar-sign', 'blue')}
         ${statCard('Leads gerados no mes', leadsMonth, 'mouse-pointer-click', 'green')}
         ${statCard('Relatorios lancados', state.relatorios.length, 'file-bar-chart', 'blue')}
@@ -1057,7 +1054,7 @@ function renderDashboard() {
         <div class="panel-header"><h3>Resumo por area</h3></div>
         <div class="kv">
           ${areaSummary('Clientes', `${active.length} ativos de ${state.clientes.length}`)}
-          ${areaSummary('Financeiro', `${money(monthlyRevenue)} em contratos`)}
+          ${areaSummary('Financeiro', `${money(monthlyRevenue)} em mensalidades cadastradas; recebimento não verificado`)}
           ${areaSummary('Funil comercial', `${crmTotal} leads > ${crmMeetings} reunioes > ${crmClosed} fechamentos`)}
           ${areaSummary('Conversao geral', closeRate)}
           ${areaSummary('Responderam', `${crmResponded} leads (${percent(crmResponded, crmTotal)})`)}
@@ -1155,91 +1152,33 @@ function renderDashboardClienteRow(row, range) {
   `;
 }
 
-function renderDashboardClienteWeeklyTable(weeks, isSalesGoal = false) {
-  const total = weeks.reduce((acc, week) => {
-    acc.spend += Number(week.spend || 0);
-    acc.revenue += Number(week.revenue || 0);
-    acc.messages += Number(week.messages || 0);
-    acc.sales += Number(week.sales || 0);
-    acc.clicks += Number(week.clicks || 0);
-    acc.impressions += Number(week.impressions || 0);
-    return acc;
-  }, { spend: 0, revenue: 0, messages: 0, sales: 0, clicks: 0, impressions: 0 });
-  const totalConversion = !isSalesGoal && total.messages && total.sales ? percentNumber(total.sales, total.messages) : 0;
-  const totalRoas = total.spend && total.revenue ? ratio(total.revenue, total.spend) : 0;
-  const totalCtr = percentNumber(total.clicks, total.impressions);
+function renderDashboardClienteWeeklyTable(weeks) {
+  const display = (value, formatter = number) => value == null ? 'Indisponível' : formatter(value);
+  const sourceLabel = (week) => week.coverage.estimatedDays ? `Estimativa proporcional (${week.coverage.estimatedDays}d)` : week.coverage.missingDays ? `Parcial (${week.coverage.observedDays}/${week.coverage.totalDays}d)` : week.coverage.observedDays ? 'Meta diária medida' : 'Sem dados Meta';
+  const totalOf = (field) => weeks.every((week) => week[field] == null) ? null : weeks.reduce((sum, week) => sum + Number(week[field] ?? 0), 0);
+  const totalSpend = totalOf('spend');
+  const totalRevenue = totalOf('revenue');
+  const totalMessages = totalOf('messages');
+  const totalSales = totalOf('sales');
+  const totalClicks = totalOf('clicks');
+  const totalImpressions = totalOf('impressions');
+  const totalRoas = weeks.every((week) => week.roas.value != null) && totalSpend > 0 ? weeks.reduce((sum, week) => sum + Number(week.attributedRevenue.value), 0) / totalSpend : null;
   return `
     <div class="meta-weekly-report client-weekly-report">
-      <div class="meta-weekly-heading">
-        <h3>Ultimas 4 semanas</h3>
-        <span>Resumo consolidado por semana</span>
-      </div>
-      <section class="table-panel meta-table-panel meta-week-summary-panel client-week-summary-panel">
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Semana</th>
-                <th>Periodo</th>
-                <th>Valor usado</th>
-                <th>Faturamento</th>
-                <th>Mensagens</th>
-                <th>Custo/msg</th>
-                <th>Vendas</th>
-                <th>Conv. msg/venda</th>
-                <th>Custo/venda</th>
-                <th>ROAS</th>
-                <th>CTR</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${weeks.map((week, index) => {
-                const previous = weeks[index - 1] || null;
-                const costPerMessage = week.messages ? ratio(week.spend, week.messages) : 0;
-                const previousCostPerMessage = previous?.messages ? ratio(previous.spend, previous.messages) : 0;
-                const conversion = !isSalesGoal && week.messages && week.sales ? percentNumber(week.sales, week.messages) : 0;
-                const previousConversion = previous && !isSalesGoal && previous.messages && previous.sales ? percentNumber(previous.sales, previous.messages) : 0;
-                const costPerSale = week.sales ? ratio(week.spend, week.sales) : 0;
-                const previousCostPerSale = previous?.sales ? ratio(previous.spend, previous.sales) : 0;
-                const roas = week.spend && week.revenue ? ratio(week.revenue, week.spend) : 0;
-                const previousRoas = previous?.spend && previous?.revenue ? ratio(previous.revenue, previous.spend) : 0;
-                const ctr = percentNumber(week.clicks, week.impressions);
-                const previousCtr = previous ? percentNumber(previous.clicks, previous.impressions) : 0;
-                return `
-                  <tr>
-                    <td><strong>Semana ${index + 1}</strong></td>
-                    <td>${date(week.since)} ate ${date(week.until)}</td>
-                    <td>${money(week.spend)}</td>
-                    <td>${trendMetric(money(week.revenue), week.revenue, previous?.revenue, true)}</td>
-                    <td>${trendMetric(week.messages ? number(Math.round(week.messages)) : '-', week.messages, previous?.messages, true)}</td>
-                    <td>${trendMetric(week.messages ? money(costPerMessage) : '-', costPerMessage, previousCostPerMessage, false)}</td>
-                    <td>${trendMetric(week.sales ? number(Math.round(week.sales)) : '-', week.sales, previous?.sales, true)}</td>
-                    <td>${trendMetric(conversion ? `${conversion.toFixed(2)}%` : '-', conversion, previousConversion, true)}</td>
-                    <td>${trendMetric(week.sales ? money(costPerSale) : '-', costPerSale, previousCostPerSale, false)}</td>
-                    <td>${trendMetric(roas ? roas.toFixed(2) : '-', roas, previousRoas, true)}</td>
-                    <td>${trendMetric(`${ctr.toFixed(2)}%`, ctr, previousCtr, true)}</td>
-                  </tr>
-                `;
-              }).join('')}
-              <tr class="client-week-total-row">
-                <td><strong>Total</strong></td>
-                <td>${date(weeks[0]?.since)} ate ${date(weeks[weeks.length - 1]?.until)}</td>
-                <td>${money(total.spend)}</td>
-                <td>${money(total.revenue)}</td>
-                <td>${total.messages ? number(Math.round(total.messages)) : '-'}</td>
-                <td>${total.messages ? money(ratio(total.spend, total.messages)) : '-'}</td>
-                <td>${total.sales ? number(Math.round(total.sales)) : '-'}</td>
-                <td>${totalConversion ? `${totalConversion.toFixed(2)}%` : '-'}</td>
-                <td>${total.sales ? money(ratio(total.spend, total.sales)) : '-'}</td>
-                <td>${totalRoas ? totalRoas.toFixed(2) : '-'}</td>
-                <td>${totalCtr.toFixed(2)}%</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
-    </div>
-  `;
+      <div class="meta-weekly-heading"><h3>Ultimas 4 semanas</h3><span>Meta Ads: gasto e resultados medidos/estimados; vendas operacionais separadas. BRL · America/Sao_Paulo</span></div>
+      <section class="table-panel meta-table-panel meta-week-summary-panel client-week-summary-panel"><div class="table-wrap"><table>
+        <thead><tr><th>Semana</th><th>Periodo</th><th>Fonte/cobertura</th><th>Gasto Meta</th><th>Receita exibida</th><th>Mensagens Meta</th><th>Vendas exibidas</th><th>ROAS atribuido Meta</th><th>CTR Meta</th></tr></thead>
+        <tbody>
+          ${weeks.map((week, index) => {
+            const previous = weeks[index - 1];
+            const sameSource = previous && previous.salesSource === week.salesSource && previous.fields.spend.source === week.fields.spend.source && !previous.coverage.missingDays && !week.coverage.missingDays && !previous.coverage.estimatedDays && !week.coverage.estimatedDays;
+            const revenue = display(week.revenue, money);
+            return `<tr><td><strong>Semana ${index + 1}</strong></td><td>${date(week.since)} ate ${date(week.until)}</td><td>${sourceLabel(week)}; receita ${week.salesSource === 'meta' ? 'atribuída Meta' : 'operacional não atribuída'}</td><td>${display(week.spend, money)}</td><td>${sameSource ? trendMetric(revenue, week.revenue, previous.revenue, true) : revenue}</td><td>${display(week.messages)}</td><td>${display(week.sales)}</td><td>${display(week.roas.value, (v) => `${v.toFixed(2)}x`)}</td><td>${week.impressions > 0 && week.clicks != null ? `${(week.clicks / week.impressions * 100).toFixed(2)}%` : 'Indisponível'}</td></tr>`;
+          }).join('')}
+          <tr class="client-week-total-row"><td><strong>Total observado/estimado</strong></td><td>${date(weeks[0]?.since)} ate ${date(weeks.at(-1)?.until)}</td><td>${weeks.some((week) => week.coverage.missingDays || week.coverage.estimatedDays) ? 'Cobertura parcial/estimada' : 'Cobertura completa'}</td><td>${display(totalSpend, money)}</td><td>${display(totalRevenue, money)}</td><td>${display(totalMessages)}</td><td>${display(totalSales)}</td><td>${display(totalRoas, (v) => `${v.toFixed(2)}x`)}</td><td>${totalImpressions > 0 && totalClicks != null ? `${(totalClicks / totalImpressions * 100).toFixed(2)}%` : 'Indisponível'}</td></tr>
+        </tbody>
+      </table></div></section>
+    </div>`;
 }
 
 function getDashboardClienteRows(range) {
@@ -1262,48 +1201,14 @@ function getDashboardClienteWeeks(cliente, range) {
 }
 
 function aggregateClientMetricsForRange(cliente, range) {
-  const dailyInsights = getClienteMetaDailyInsightsInRange(cliente.id, range.since, range.until);
-  const relatorios = getClienteRelatoriosInRange(cliente.id, range.since, range.until);
-  const vendas = state.vendas.filter((venda) =>
-    venda.cliente_id === cliente.id &&
-    isDateInRange(venda.data_venda, range.since, range.until) &&
-    matchesDashboardOrigin(venda.origem)
-  );
-  const isSalesGoal = getClientMetaGoalKey(cliente) === 'vendas';
-  const origin = state.dashboardClientesOrigem || 'all';
-  const allowMetaSales = origin === 'all' || origin === 'Meta Ads';
-  const manualSales = sumBy(vendas, 'quantidade_vendas');
-  const manualRevenue = sumBy(vendas, 'valor_total');
-  const manualProducts = sumBy(vendas, 'quantidade_produtos');
-  const fallback = {
-    spend: sumWeightedReports(relatorios, 'investimento', range.since, range.until),
-    impressions: sumWeightedReports(relatorios, 'impressoes', range.since, range.until),
-    clicks: sumWeightedReports(relatorios, 'cliques', range.since, range.until),
-    messages: sumWeightedReports(relatorios, 'mensagens', range.since, range.until),
-    sales: sumWeightedReports(relatorios, 'vendas', range.since, range.until),
-    revenue: sumWeightedReports(relatorios, 'faturamento_informado', range.since, range.until),
-  };
-  const savedMeta = dailyInsights.length ? {
-    spend: sumBy(dailyInsights, 'investimento'),
-    impressions: sumBy(dailyInsights, 'impressoes'),
-    clicks: sumBy(dailyInsights, 'cliques'),
-    messages: sumBy(dailyInsights, 'mensagens'),
-    sales: sumBy(dailyInsights, 'vendas'),
-    revenue: sumBy(dailyInsights, 'faturamento'),
-  } : null;
-  const meta = savedMeta || fallback;
-
-  return {
-    ...range,
-    spend: meta.spend,
-    impressions: meta.impressions,
-    clicks: meta.clicks,
-    messages: meta.messages,
-    sales: isSalesGoal && allowMetaSales ? meta.sales : manualSales,
-    products: isSalesGoal && allowMetaSales ? (manualProducts || meta.sales) : manualProducts,
-    revenue: isSalesGoal && allowMetaSales ? meta.revenue : manualRevenue,
-    salesSource: isSalesGoal ? 'meta' : 'manual',
-  };
+  return aggregateClientMetrics({
+    range,
+    daily: getClienteMetaDailyInsightsInRange(cliente.id, range.since, range.until),
+    reports: getClienteRelatoriosInRange(cliente.id, range.since, range.until),
+    sales: state.vendas.filter((venda) => venda.cliente_id === cliente.id),
+    origin: state.dashboardClientesOrigem || 'all',
+    goal: getClientMetaGoalKey(cliente),
+  });
 }
 
 function getDashboardOriginOptions() {
@@ -1384,35 +1289,6 @@ function getClienteRelatoriosInRange(clienteId, since, until) {
     relatorio.cliente_id === clienteId &&
     dateRangesOverlap(relatorio.periodo_inicio, relatorio.periodo_fim, since, until)
   );
-}
-
-function sumWeightedReports(reports, key, since, until) {
-  return reports.reduce((sum, report) => {
-    const weight = reportOverlapWeight(report.periodo_inicio, report.periodo_fim, since, until);
-    return sum + (Number(report?.[key] || 0) * weight);
-  }, 0);
-}
-
-function reportOverlapWeight(start, end, since, until) {
-  const reportDays = inclusiveDays(start, end);
-  const overlapDays = overlappingDays(start, end, since, until);
-  if (!reportDays || !overlapDays) return 0;
-  return overlapDays / reportDays;
-}
-
-function inclusiveDays(start, end) {
-  if (!start || !end) return 0;
-  const startDate = new Date(`${start}T00:00:00`);
-  const endDate = new Date(`${end}T00:00:00`);
-  const diff = Math.round((endDate.getTime() - startDate.getTime()) / 86400000) + 1;
-  return Math.max(0, diff);
-}
-
-function overlappingDays(start, end, since, until) {
-  if (!start || !end || !since || !until) return 0;
-  const overlapStart = String(start) > String(since) ? start : since;
-  const overlapEnd = String(end) < String(until) ? end : until;
-  return inclusiveDays(overlapStart, overlapEnd);
 }
 
 function isDateInRange(value, since, until) {
@@ -1678,7 +1554,7 @@ async function loadClientMetaCosts(force = false) {
       try {
         const goalKey = getClientMetaGoalKey(cliente);
         const goal = metaGoalConfig[goalKey] || metaGoalConfig.mensagens;
-        const summary = await fetchMetaAccountResultCost(fixedMetaAccessToken, normalizeMetaAccount(cliente.meta_ads_act), range.since, range.until, goal);
+        const summary = await fetchMetaAccountResultCost(cliente.id, range.since, range.until, goalKey, goal);
         return [cliente.id, { ...summary, goalKey, label: goal.metricLabel, since: range.since, until: range.until }];
       } catch (error) {
         return [cliente.id, { error: error.message || 'Falha Meta Ads' }];
@@ -2384,10 +2260,11 @@ function renderRelatorioDetail(id) {
         </div>
         ${statusBadge('ativo')}
       </div>
+      <p class="muted">${escapeHtml(relatorio.analise_estrategica?.includes('Fonte: Meta Graph API') ? 'Fonte e limitações descritas abaixo; valores de alcance e ROAS ausentes permanecem indisponíveis.' : 'Relatório legado/manual: fonte, cobertura e atribuição não documentadas; não interpretar ROAS como receita conciliada.')}</p>
       <div class="stats-grid">
         ${statCard('Investimento', money(relatorio.investimento), 'badge-dollar-sign', 'gold')}
         ${statCard('Impressoes', number(relatorio.impressoes), 'eye', 'blue')}
-        ${statCard('Alcance', number(relatorio.alcance), 'radar', 'green')}
+        ${statCard('Alcance', metricText(relatorio.alcance, number), 'radar', 'green')}
         ${statCard('Cliques', number(relatorio.cliques), 'mouse-pointer-click', 'blue')}
         ${statCard('CTR', `${Number(relatorio.ctr || 0).toFixed(2)}%`, 'percent', 'green')}
         ${statCard('CPC', money(relatorio.cpc), 'coins', 'gold')}
@@ -2396,7 +2273,7 @@ function renderRelatorioDetail(id) {
         ${statCard('Mensagens', number(relatorio.mensagens), 'message-circle', 'blue')}
         ${statCard('Custo/msg', money(relatorio.custo_por_mensagem), 'messages-square', 'gold')}
         ${statCard('Vendas', number(relatorio.vendas), 'shopping-bag', 'green')}
-        ${statCard('ROAS', Number(relatorio.roas || 0).toFixed(2), 'trending-up', 'green')}
+        ${statCard('ROAS', metricText(relatorio.roas, (v) => v.toFixed(2)), 'trending-up', 'green')}
       </div>
       <div class="grid-2">
         <article class="panel nested-report-panel">
@@ -2446,9 +2323,9 @@ function renderMetaAds() {
         <div class="panel-header"><h2>Consulta Meta Ads API</h2>${statusBadge('ativo')}</div>
         <div class="form-grid">
           <div class="token-fixed-box">
-            <span>Access token Meta Ads</span>
-            <strong>Token fixo configurado</strong>
-            <small>Usado automaticamente nas consultas. Nao aparece nos PDFs.</small>
+            <span>Consulta Meta Ads</span>
+            <strong>Credencial protegida no servidor</strong>
+            <small>Dados medidos pela API Meta para o cliente e periodo selecionados.</small>
           </div>
           <label>Cliente
             <select data-action="meta-client">
@@ -2470,7 +2347,7 @@ function renderMetaAds() {
         ${state.metaAds.loading ? loadingState('Consultando Meta Ads...') : ''}
         ${state.metaAds.error ? `<div class="state"><strong>Erro na Meta Ads API</strong><span>${escapeHtml(state.metaAds.error)}</span></div>` : ''}
       </section>
-      ${report ? renderMetaReport(report) : emptyState('Nenhum relatorio carregado', clientesComMeta.length ? 'Selecione cliente, periodo e token para buscar dados reais.' : 'Cadastre o meta_ads_act em ao menos um cliente.')}
+      ${report ? renderMetaReport(report) : emptyState('Nenhum relatorio carregado', clientesComMeta.length ? 'Selecione cliente e periodo para buscar dados reais.' : 'Cadastre o meta_ads_act em ao menos um cliente.')}
     `}
   `;
 }
@@ -2483,7 +2360,7 @@ function renderMetaReport(report) {
         <div>
           <p class="meta-report-eyebrow">Gestao de Trafego - The Midia Marketing</p>
           <h2>${escapeHtml(report.cliente.nome_empresa)}</h2>
-          <p>${escapeHtml(report.since)} a ${escapeHtml(report.until)} - ${escapeHtml(report.accountId)} - <strong>${report.rows.length} ativos</strong></p>
+          <p>${escapeHtml(report.since)} a ${escapeHtml(report.until)} - ${escapeHtml(report.accountId)} - <strong>${report.rows.length} anúncios com dados no período</strong></p>
           ${report.previous ? `<p class="meta-compare-period">Comparado com ${escapeHtml(report.previous.since)} a ${escapeHtml(report.previous.until)}</p>` : ''}
         </div>
         <div class="meta-report-actions">
@@ -2492,16 +2369,16 @@ function renderMetaReport(report) {
         </div>
       </div>
       <div class="meta-kpi-grid">
-        ${metaKpi('Total de anuncios ativos', report.rows.length, `${report.rows.length} no periodo`, false, metaComparison(report.rows.length, report.previous?.rows?.length || 0, number))}
-        ${metaKpi(`Gasto - ${report.since} a ${report.until}`, money(report.totals.investimento), 'anuncios ativos', false, metaComparison(report.totals.investimento, report.previous?.totals?.investimento || 0, money))}
-        ${metaKpi('Cliques no periodo', number(report.totals.cliques), 'total combinado', false, metaComparison(report.totals.cliques, report.previous?.totals?.cliques || 0, number))}
-        ${metaKpi(`${report.goal.metricLabel} no periodo`, number(report.totals.resultados), 'total de resultados', false, metaComparison(report.totals.resultados, report.previous?.totals?.resultados || 0, number))}
-        ${metaKpi('Impressoes', number(report.totals.impressoes), '', false, metaComparison(report.totals.impressoes, report.previous?.totals?.impressoes || 0, number))}
-        ${metaKpi('Alcance', number(report.totals.alcance), '', false, metaComparison(report.totals.alcance, report.previous?.totals?.alcance || 0, number))}
-        ${metaKpi('CTR medio', `${report.totals.ctr.toFixed(2)}%`, '', false, metaComparison(report.totals.ctr, report.previous?.totals?.ctr || 0, formatPercent))}
-        ${metaKpi('CPC medio', money(report.totals.cpc), '', true, metaComparison(report.totals.cpc, report.previous?.totals?.cpc || 0, money, true))}
-        ${metaKpi('CPM medio', money(report.totals.cpm), '', true, metaComparison(report.totals.cpm, report.previous?.totals?.cpm || 0, money, true))}
-        ${metaKpi(report.goal.costLabel, money(report.totals.custo_por_resultado), '', true, metaComparison(report.totals.custo_por_resultado, report.previous?.totals?.custo_por_resultado || 0, money, true))}
+        ${metaKpi('Anuncios com dados no periodo', report.rows.length, `${report.rows.length} no periodo`, false, metaComparison(report.rows.length, report.previous?.rows?.length ?? null, number))}
+        ${metaKpi(`Gasto - ${report.since} a ${report.until}`, money(report.totals.investimento), 'gasto no periodo', false, metaComparison(report.totals.investimento, report.previous?.totals?.investimento ?? null, money))}
+        ${metaKpi('Cliques no periodo', number(report.totals.cliques), 'total combinado', false, metaComparison(report.totals.cliques, report.previous?.totals?.cliques ?? null, number))}
+        ${metaKpi(`${report.goal.metricLabel} no periodo`, number(report.totals.resultados), 'total de resultados', false, metaComparison(report.totals.resultados, report.previous?.totals?.resultados ?? null, number))}
+        ${metaKpi('Impressoes', number(report.totals.impressoes), '', false, metaComparison(report.totals.impressoes, report.previous?.totals?.impressoes ?? null, number))}
+        ${metaKpi('Alcance unico da conta', metricText(report.totals.alcance, number), 'Meta, nível da conta', false, metaComparison(report.totals.alcance, report.previous?.totals?.alcance, number))}
+        ${metaKpi('CTR medio', `${report.totals.ctr.toFixed(2)}%`, '', false, metaComparison(report.totals.ctr, report.previous?.totals?.ctr ?? null, formatPercent))}
+        ${metaKpi('CPC medio', metricText(report.totals.cpc, money), '', true, metaComparison(report.totals.cpc, report.previous?.totals?.cpc ?? null, money, true))}
+        ${metaKpi('CPM medio', metricText(report.totals.cpm, money), '', true, metaComparison(report.totals.cpm, report.previous?.totals?.cpm ?? null, money, true))}
+        ${metaKpi(report.goal.costLabel, metricText(report.totals.custo_por_resultado, money), '', true, metaComparison(report.totals.custo_por_resultado, report.previous?.totals?.custo_por_resultado ?? null, money, true))}
       </div>
       ${renderMetaReportSales(report)}
       ${renderMetaWhatsappReportGenerator(report)}
@@ -2512,11 +2389,11 @@ function renderMetaReport(report) {
           <button class="${state.metaAds.viewMode === 'table' ? 'active' : ''}" data-action="meta-view-mode" data-mode="table">Tabela 4 semanas</button>
         </div>
         <input class="input meta-search" placeholder="Buscar anuncio..." data-action="meta-search">
-        <span>${report.rows.length} anuncio(s)</span>
+        <span>${report.rows.length} anuncio(s) com dados no período</span>
       </div>
       ${renderMetaReportBody(report)}
       <footer class="meta-report-footer">
-        <span>The Midia Marketing - Token nao exposto</span>
+        <span>Fonte: Meta Graph API; BRL; período em America/Sao_Paulo; atribuição conforme configuração Meta (janela não registrada). Alcance único consultado no nível da conta.</span>
         <span>Atualizado em ${new Date().toLocaleString('pt-BR')}</span>
       </footer>
     </section>
@@ -2555,13 +2432,14 @@ function getMetaReportSales(report) {
 function renderMetaReportSales(report) {
   if (state.vendasMissingTable) return '';
   const vendas = getMetaReportSales(report);
+  const metrics = deriveReportMetrics(report, vendas);
   const totalRevenue = sumBy(vendas, 'valor_total');
   const totalSales = sumBy(vendas, 'quantidade_vendas');
   const totalProducts = sumBy(vendas, 'quantidade_produtos');
   const averageTicket = ratio(totalRevenue, totalSales);
-  const salesRoas = ratio(totalRevenue, report.totals.investimento);
+  const salesRoas = metrics.roas.value;
   const totalMessages = report.goalKey === 'mensagens' ? report.totals.resultados : report.totals.mensagens;
-  const messageToSaleConversion = percent(totalSales, totalMessages);
+  const messageToSaleConversion = null; // operational sales are not reconciled to Meta messages
 
   return `
     <section class="meta-sales-panel">
@@ -2572,13 +2450,14 @@ function renderMetaReportSales(report) {
         </div>
         <small>${escapeHtml(date(report.since))} ate ${escapeHtml(date(report.until))}</small>
       </div>
+      <p class="muted">Vendas operacionais não conciliadas com anúncios. Receita atribuída Meta: ${money(report.totals.faturamento)}. Janela de atribuição: configuração Meta não registrada. Fonte: Graph API, BRL, America/Sao_Paulo.</p>
       <div class="meta-sales-summary">
-        ${metaSalesMetric('Valor de vendas', money(totalRevenue))}
-        ${metaSalesMetric('Vendas', number(totalSales))}
-        ${metaSalesMetric('Produtos', number(totalProducts))}
-        ${metaSalesMetric('Ticket medio', money(averageTicket))}
-        ${metaSalesMetric('ROAS vendas', `${salesRoas.toFixed(2)}x`)}
-        ${metaSalesMetric('Conversao msg > vendas', messageToSaleConversion)}
+        ${metaSalesMetric('Vendas operacionais (todas origens)', vendas.length ? money(totalRevenue) : 'Indisponivel')}
+        ${metaSalesMetric('Vendas', vendas.length ? number(totalSales) : 'Indisponivel')}
+        ${metaSalesMetric('Produtos', vendas.length ? number(totalProducts) : 'Indisponivel')}
+        ${metaSalesMetric('Ticket medio operacional', totalSales ? money(averageTicket) : 'Indisponivel')}
+        ${metaSalesMetric('ROAS atribuido Meta', metricText(salesRoas, (v) => `${v.toFixed(2)}x`))}
+        ${metaSalesMetric('Conversao msg > vendas', 'Indisponivel: sem conciliacao')}
       </div>
       ${vendas.length ? `
         <div class="table-wrap meta-sales-table">
@@ -2617,51 +2496,31 @@ function metaSalesMetric(labelText, value) {
 }
 
 function buildMetaWhatsappReport(report) {
-  const context = getMetaBusinessContext(report);
-  const sales = getMetaReportSales(report);
-  const salesRevenue = sumBy(sales, 'valor_total');
-  const registeredSales = sumBy(sales, 'quantidade_vendas');
-  const revenue = salesRevenue || report.totals.faturamento || 0;
-  const salesCount = registeredSales || report.totals.vendas || 0;
-  const roas = ratio(revenue, report.totals.investimento);
-  const goalMetric = getMetaPrimaryMetric(report, salesCount, revenue, roas);
   const previous = report.previous?.totals || null;
-  const previousGoalMetric = previous ? getMetaPrimaryMetric({ ...report, totals: previous }, previous.vendas || 0, previous.faturamento || 0, ratio(previous.faturamento, previous.investimento)) : null;
-  const highlight = getMetaWeeklyHighlight(report);
-  const positives = buildMetaPositivePoints(report, goalMetric, previousGoalMetric, context, { revenue, salesCount, roas });
-  const improvements = buildMetaImprovementPoints(report, goalMetric, context, { revenue, salesCount, roas });
-
+  const sales = getMetaReportSales(report);
+  const metrics = deriveReportMetrics(report, sales);
+  const operationalRevenue = metrics.operational.value;
+  const metaRevenue = metrics.revenue.value;
+  const roas = metrics.roas.value;
+  const goalMetric = getMetaPrimaryMetric(report);
+  const previousGoalMetric = previous ? getMetaPrimaryMetric({ ...report, totals: previous }) : null;
+  const positives = buildMetaPositivePoints(report, goalMetric, previousGoalMetric, getMetaBusinessContext(report), { revenue: metaRevenue, roas });
   return [
     `📊 RELATÓRIO SEMANAL – ${String(report.cliente.nome_empresa || 'CLIENTE').toUpperCase()}`,
-    '',
-    `Período: ${date(report.since)} a ${date(report.until)}`,
-    '',
-    '📈 Principais números',
-    '',
-    `• Investimento: ${formatMetricWithVariation(report.totals.investimento, previous?.investimento, money)}`,
-    `• ${goalMetric.label}: ${formatMetricWithVariation(goalMetric.value, previousGoalMetric?.value, goalMetric.formatter)}`,
-    `• ${goalMetric.costLabel}: ${formatMetricWithVariation(goalMetric.cost, previousGoalMetric?.cost, money)}`,
-    context === 'ecommerce' && revenue ? `• Faturamento: ${formatMetricWithVariation(revenue, previous?.faturamento, money)}` : null,
-    context === 'ecommerce' && roas ? `• ROAS: ${formatMetricWithVariation(roas, ratio(previous?.faturamento, previous?.investimento), (value) => `${Number(value || 0).toFixed(2)}x`)}` : null,
-    `• Alcance: ${formatMetricWithVariation(report.totals.alcance, previous?.alcance, number)}`,
-    `• Cliques: ${formatMetricWithVariation(report.totals.cliques, previous?.cliques, number)}`,
-    '',
-    '🏆 Destaque da semana',
-    '',
-    highlight,
-    '',
-    '✅ Pontos positivos',
-    '',
-    ...positives.map((item) => `• ${item}`),
-    '',
-    '⚠️ Pontos de melhoria',
-    '',
-    ...improvements.map((item) => `• ${item}`),
-    '',
-    '📌 Resumo',
-    '',
-    buildMetaExecutiveSummary(report, goalMetric, previousGoalMetric, context, { roas, revenue, salesCount }),
-  ].filter((line) => line != null).join('\n');
+    `Período: ${date(report.since)} a ${date(report.until)} (America/Sao_Paulo)`,
+    'Fonte: Meta Graph API · moeda: BRL · atribuição: configuração Meta, janela não registrada',
+    `Investimento Meta: ${formatMetricWithVariation(report.totals.investimento, previous?.investimento, money)}`,
+    `${goalMetric.label} Meta: ${formatMetricWithVariation(goalMetric.value, previousGoalMetric?.value, goalMetric.formatter)}`,
+    `${goalMetric.costLabel}: ${metricText(goalMetric.cost, money)}`,
+    `Receita atribuída Meta: ${formatMetricWithVariation(metaRevenue, previous?.faturamento, money)}`,
+    `ROAS atribuído Meta: ${metricText(roas, (v) => `${v.toFixed(2)}x`)}`,
+    `Vendas operacionais registradas: ${metricText(operationalRevenue, money)} (sem conciliação com Meta)`,
+    `Alcance único da conta: ${metricText(report.totals.alcance, number)}`,
+    `Cliques Meta: ${formatMetricWithVariation(report.totals.cliques, previous?.cliques, number)}`,
+    `Destaque no período: ${getMetaWeeklyHighlight(report)}`,
+    `Pontos observados: ${positives.length ? positives.join(' ') : 'Sem melhora confirmada pelos dados comparáveis.'}`,
+    'Resumo: resultados medidos pela Meta; vendas operacionais exibidas separadamente. Verificar cobertura comercial antes de atribuir receita adicional à mídia.',
+  ].join('\n');
 }
 
 function getMetaBusinessContext(report) {
@@ -2674,12 +2533,12 @@ function getMetaBusinessContext(report) {
 
 function getMetaPrimaryMetric(report, salesCount = 0, revenue = 0, roas = 0) {
   if (report.goalKey === 'vendas') {
-    const totalSales = salesCount || report.totals.vendas || report.totals.resultados;
+    const totalSales = report.totals.vendas ?? report.totals.resultados;
     return {
       label: 'Vendas',
       value: totalSales,
-      cost: totalSales ? ratio(report.totals.investimento, totalSales) : report.totals.custo_por_resultado,
-      costLabel: totalSales ? 'Custo por venda' : report.goal.costLabel,
+      cost: totalSales > 0 ? ratio(report.totals.investimento, totalSales) : null,
+      costLabel: 'Custo por venda',
       formatter: number,
       roas,
     };
@@ -2694,10 +2553,11 @@ function getMetaPrimaryMetric(report, salesCount = 0, revenue = 0, roas = 0) {
 }
 
 function formatMetricWithVariation(current, previous, formatter = number) {
-  const currentValue = Number(current || 0);
-  const previousValue = Number(previous || 0);
+  if (current == null) return 'Indisponivel';
+  const currentValue = Number(current);
   const formatted = formatter(currentValue);
-  if (!previousValue) return formatted;
+  if (previous == null || Number(previous) === 0) return formatted;
+  const previousValue = Number(previous);
   const variation = ((currentValue - previousValue) / previousValue) * 100;
   if (!Number.isFinite(variation) || Math.abs(variation) < 0.1) return `${formatted} (estável)`;
   return `${formatted} (${variation > 0 ? '↑' : '↓'} ${Math.abs(variation).toFixed(0)}%)`;
@@ -2705,7 +2565,7 @@ function formatMetricWithVariation(current, previous, formatter = number) {
 
 function getVariationPercent(current, previous) {
   const previousValue = Number(previous || 0);
-  if (!previousValue) return null;
+  if (current == null || previous == null || !previousValue) return null;
   const variation = ((Number(current || 0) - previousValue) / previousValue) * 100;
   return Number.isFinite(variation) ? variation : null;
 }
@@ -2722,9 +2582,9 @@ function getMetaWeeklyHighlight(report) {
   const name = best.ad_name || best.campaign_name || 'principal anúncio';
   const campaign = best.campaign_name && best.campaign_name !== name ? `, da campanha “${best.campaign_name}”` : '';
   if (best.resultados) {
-    return `O criativo “${name}”${campaign}, foi o principal destaque, gerando ${number(best.resultados)} ${String(report.goal.metricLabel || 'resultados').toLowerCase()} com custo de ${money(ratio(best.spend, best.resultados))} por resultado.`;
+    return `O criativo “${name}”${campaign} teve resultado no período, gerando ${number(best.resultados)} ${String(report.goal.metricLabel || 'resultados').toLowerCase()} com custo de ${money(ratio(best.spend, best.resultados))} por resultado.`;
   }
-  return `O criativo “${name}”${campaign}, foi o principal destaque em atenção, com ${number(best.clicks)} cliques e investimento de ${money(best.spend)}.`;
+  return `O criativo “${name}”${campaign} registrou ${number(best.clicks)} cliques e investimento de ${money(best.spend)}.`;
 }
 
 function buildMetaPositivePoints(report, goalMetric, previousGoalMetric, context, salesData) {
@@ -2736,67 +2596,13 @@ function buildMetaPositivePoints(report, goalMetric, previousGoalMetric, context
 
   if (goalVariation != null && goalVariation > 0) points.push(`Crescimento de ${goalVariation.toFixed(0)}% em ${goalMetric.label.toLowerCase()}.`);
   if (costVariation != null && costVariation < 0) points.push(`Redução de ${Math.abs(costVariation).toFixed(0)}% no ${goalMetric.costLabel.toLowerCase()}.`);
-  if (context === 'ecommerce' && salesData.roas >= 1) points.push(`ROAS positivo de ${salesData.roas.toFixed(2)}x no período.`);
+  if (context === 'ecommerce' && salesData.roas != null && salesData.roas >= 1) points.push(`ROAS atribuído Meta de ${salesData.roas.toFixed(2)}x no período.`);
   if (reachVariation != null && reachVariation > 0) points.push(`Aumento de ${reachVariation.toFixed(0)}% no alcance das campanhas.`);
   if (clicksVariation != null && clicksVariation > 0) points.push(`Mais tráfego gerado, com crescimento de ${clicksVariation.toFixed(0)}% nos cliques.`);
-  if (report.totals.ctr >= 1) points.push(`CTR médio de ${report.totals.ctr.toFixed(2)}%, indicando boa taxa de interesse inicial.`);
-  if (goalMetric.value > 0) points.push(`${goalMetric.label} gerados com consistência no período analisado.`);
+  if (report.totals.ctr >= 1) points.push(`CTR de ${report.totals.ctr.toFixed(2)}% no período.`);
+  if (goalMetric.value > 0) points.push(`${goalMetric.label} medidos no período analisado.`);
 
-  return fillUniquePoints(points, [
-    'As campanhas mantiveram presença ativa durante a semana.',
-    'O investimento trouxe volume mensurável de interação.',
-    'Há base de dados suficiente para orientar os próximos testes.',
-  ], 3);
-}
-
-function buildMetaImprovementPoints(report, goalMetric, context, salesData) {
-  const points = [];
-  if (!goalMetric.value) points.push(`Melhorar a geração de ${goalMetric.label.toLowerCase()} com novas ofertas e criativos.`);
-  if (goalMetric.value && report.totals.cliques > goalMetric.value * 8) points.push(`Melhorar a conversão dos cliques em novos contatos ou oportunidades.`);
-  if (report.totals.cpc > 1.5) points.push('Testar novos criativos para reduzir o custo por clique.');
-  if (report.totals.ctr < 1) points.push('Reforçar chamadas e criativos para aumentar a taxa de clique.');
-  if (context === 'restaurante') points.push('Acompanhar se as mensagens e cliques estão virando reservas, visitas ou pedidos.');
-  if (context === 'ecommerce' && salesData.roas < 2) points.push('Acompanhar conversão do site, ticket médio e recuperação de carrinho para elevar o ROAS.');
-  if (context === 'leads') points.push('Validar a qualidade dos leads e o retorno comercial dos contatos gerados.');
-  points.push('Criar novas variações do anúncio com melhor desempenho.');
-
-  return fillUniquePoints(points, [
-    'Acompanhar a qualidade dos resultados gerados na operação comercial.',
-    'Revisar segmentação e oferta antes de aumentar o investimento.',
-    'Manter testes semanais para encontrar novos criativos vencedores.',
-  ], 3);
-}
-
-function buildMetaExecutiveSummary(report, goalMetric, previousGoalMetric, context, salesData) {
-  const goalVariation = getVariationPercent(goalMetric.value, previousGoalMetric?.value);
-  const improved = goalVariation == null ? goalMetric.value > 0 : goalVariation >= 0;
-  const contextFocus = {
-    restaurante: 'transformar as interações em reservas, visitas e pedidos.',
-    ecommerce: 'melhorar conversão, faturamento e ROAS.',
-    leads: 'aumentar volume com qualidade comercial.',
-    mensagens: 'manter o volume de conversas e melhorar a conversão dos atendimentos.',
-  }[context] || 'melhorar a conversão dos resultados.';
-
-  if (context === 'ecommerce' && salesData.revenue) {
-    return `A semana gerou ${money(salesData.revenue)} em vendas registradas e ROAS de ${salesData.roas.toFixed(2)}x. O próximo foco será manter os anúncios mais eficientes e ${contextFocus}`;
-  }
-  if (improved) {
-    return `A semana apresentou desempenho positivo em ${goalMetric.label.toLowerCase()} e trouxe dados claros para otimização. O próximo foco será reforçar o que funcionou melhor e ${contextFocus}`;
-  }
-  return `A semana mostrou oportunidades de ajuste na geração de ${goalMetric.label.toLowerCase()}. O próximo foco será revisar criativos, oferta e segmentação para ${contextFocus}`;
-}
-
-function fillUniquePoints(points, fallback, limit = 3) {
-  const seen = new Set();
-  return [...points, ...fallback]
-    .map((item) => String(item || '').trim())
-    .filter((item) => {
-      const key = item.toLowerCase();
-      if (!item || seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    })
-    .slice(0, limit);
+  return points.slice(0, 3);
 }
 
 function renderMetaReportBody(report) {
@@ -3034,7 +2840,7 @@ function renderMetaWeeklyTable(rows, goal) {
                     <td>${date(week.since)} ate ${date(week.until)}</td>
                     <td>${money(totals.investimento)}</td>
                     <td>${number(totals.impressoes)}</td>
-                    <td>${number(totals.alcance)}</td>
+                    <td>${metricText(totals.alcance, number)}</td>
                     <td>${number(totals.cliques)}</td>
                     <td>${totals.ctr.toFixed(2)}%</td>
                     <td>${money(totals.cpc)}</td>
@@ -3063,8 +2869,9 @@ function metaKpi(title, value, sub = '', wide = false, comparison = '') {
 }
 
 function metaComparison(current, previous, formatter = number, inverse = false) {
-  const currentValue = Number(current || 0);
-  const previousValue = Number(previous || 0);
+  if (current == null || previous == null) return '<div class="meta-kpi-compare"><small>Comparacao indisponivel</small></div>';
+  const currentValue = Number(current);
+  const previousValue = Number(previous);
   const diff = currentValue - previousValue;
   const direction = diff > 0 ? 'up' : diff < 0 ? 'down' : 'flat';
   const performance = direction === 'flat' ? 'flat' : inverse ? (diff < 0 ? 'good' : 'bad') : (diff > 0 ? 'good' : 'bad');
@@ -3077,6 +2884,8 @@ function metaComparison(current, previous, formatter = number, inverse = false) 
   `;
 }
 
+function metricText(value, formatter = number) { return value == null ? 'Indisponivel' : formatter(value); }
+
 function formatPercent(value) {
   return `${Number(value || 0).toFixed(2)}%`;
 }
@@ -3086,7 +2895,7 @@ function renderMetaAdCard(row, goal) {
     <article class="meta-ad-card">
       <div class="meta-thumb">${row.thumb ? `<img src="${escapeHtml(row.thumb)}" alt="">` : `<span>${escapeHtml((row.ad_name || row.campaign_name || 'AD').slice(0, 2).toUpperCase())}</span>`}</div>
       <div class="meta-ad-main">
-        <div class="meta-status"><span></span>Ativo</div>
+        <div class="meta-status"><span></span>Resultado no período · estado atual: ${escapeHtml(row.status || 'desconhecido')}</div>
         <h3>${escapeHtml(row.ad_name || row.campaign_name || '-')}</h3>
         <p>${escapeHtml(row.campaign_name || '')}${row.adset_name ? ` - ${escapeHtml(row.adset_name)}` : ''}</p>
         <div class="meta-ad-metrics">
@@ -6459,12 +6268,7 @@ function csvEscape(value) {
 }
 
 async function fetchMetaAdsReport() {
-  const token = state.metaAds.token;
   const cliente = state.clientes.find((item) => item.id === state.metaAds.clienteId);
-  if (!token || token.length < 20) {
-    toast('Informe um Access Token Meta Ads.', 'error');
-    return;
-  }
   if (!cliente?.meta_ads_act) {
     toast('Selecione um cliente com meta_ads_act cadastrado.', 'error');
     return;
@@ -6482,15 +6286,17 @@ async function fetchMetaAdsReport() {
     const accountId = normalizeMetaAccount(cliente.meta_ads_act);
     const goal = metaGoalConfig[state.metaAds.goal] || metaGoalConfig.mensagens;
     const fourWeeks = getFourWeeksRange();
-    const ads = await fetchMetaAds(token, accountId);
+    const ads = await fetchMetaAds(cliente.id, state.metaAds.goal);
     const previousRange = getPreviousPeriodRange(state.metaAds.since, state.metaAds.until);
-    const [rows, previousRows, weeklyRows] = await Promise.all([
-      fetchMetaInsights(token, accountId, state.metaAds.since, state.metaAds.until, goal, ads),
-      fetchMetaInsights(token, accountId, previousRange.since, previousRange.until, goal, ads),
-      fetchMetaInsights(token, accountId, fourWeeks.since, fourWeeks.until, goal, ads, '7'),
+    const [rows, previousRows, weeklyRows, currentAggregate, previousAggregate] = await Promise.all([
+      fetchMetaInsights(cliente.id, state.metaAds.since, state.metaAds.until, goal, ads),
+      fetchMetaInsights(cliente.id, previousRange.since, previousRange.until, goal, ads),
+      fetchMetaInsights(cliente.id, fourWeeks.since, fourWeeks.until, goal, ads, '7'),
+      requestMeta(cliente.id, 'summary', state.metaAds.since, state.metaAds.until, state.metaAds.goal),
+      requestMeta(cliente.id, 'summary', previousRange.since, previousRange.until, state.metaAds.goal),
     ]);
-    const totals = summarizeMetaRows(rows);
-    const previousTotals = summarizeMetaRows(previousRows);
+    const totals = summarizeMetaRows(rows, currentAggregate[0]);
+    const previousTotals = summarizeMetaRows(previousRows, previousAggregate[0]);
     state.metaAds.report = {
       cliente,
       accountId,
@@ -6527,7 +6333,7 @@ async function fetchGoogleAdsReport(cliente, since, until) {
   state.googleAds.report = null;
   render();
   try {
-    const report = await fetchLocalGoogleAdsReport({ customerId: cliente.google_ads_id, since, until });
+    const report = await fetchLocalGoogleAdsReport({ clienteId: cliente.id, since, until });
     report.clienteName = cliente.nome_empresa || '';
     state.googleAds.report = report;
   } catch (error) {
@@ -6541,7 +6347,7 @@ async function fetchGoogleAdsReport(cliente, since, until) {
 async function fetchLocalGoogleAdsReport(payload) {
   const response = await fetch('/api/google-ads', {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${state.session?.access_token || ''}` },
     body: JSON.stringify(payload),
   });
   const data = await response.json().catch(() => ({}));
@@ -6588,89 +6394,37 @@ function normalizeMetaAccount(value) {
   return raw.startsWith('act_') ? raw : `act_${raw}`;
 }
 
-async function fetchMetaAccountResultCost(token, accountId, since, until, goal) {
-  const fields = ['spend', 'actions'].join(',');
-  const params = new URLSearchParams({
-    fields,
-    time_range: JSON.stringify({ since, until }),
-    access_token: token,
+const metaRequestCache = new Map();
+async function requestMeta(clienteId, mode, since = '', until = '', objetivo = 'mensagens', timeIncrement = '') {
+  const key = [state.session?.user?.id, clienteId, mode, since, until, objetivo, timeIncrement].join(':');
+  const cached = metaRequestCache.get(key);
+  if (cached && cached.expires > Date.now()) return cached.data;
+  const { data, error } = await supabase.functions.invoke('meta-ads-read', {
+    body: { cliente_id: clienteId, mode, since, until, objetivo, time_increment: timeIncrement },
   });
-  const response = await fetch(`https://graph.facebook.com/v20.0/${accountId}/insights?${params.toString()}`);
-  const data = await response.json();
-  if (!response.ok || data.error) {
-    const err = data.error || {};
-    if (String(err.code) === '190') throw new Error('Token expirado');
-    throw new Error(err.message || `Erro Meta Ads ${response.status}`);
+  if (error || data?.error) {
+    const response = await error?.context?.json?.().catch(() => ({}));
+    throw new Error(data?.error || response?.error || 'Consulta Meta indisponivel. Verifique a sessao e a configuracao do servidor.');
   }
-  const row = data.data?.[0] || {};
+  metaRequestCache.set(key, { data: data.data || [], expires: Date.now() + 5 * 60000 });
+  return data.data || [];
+}
+
+async function fetchMetaAccountResultCost(clienteId, since, until, goalKey, goal) {
+  const row = (await requestMeta(clienteId, 'summary', since, until, goalKey))[0] || {};
   const investimento = Number(row.spend || 0);
   const resultados = extractMetaAction(row, goal.actionTypes);
-  return {
-    investimento,
-    resultados,
-    custo: resultados ? investimento / resultados : 0,
-  };
+  return { investimento, resultados, custo: resultados ? investimento / resultados : 0 };
 }
 
-async function fetchMetaInsights(token, accountId, since, until, goal, ads, timeIncrement = '') {
-  const fields = [
-    'ad_id',
-    'ad_name',
-    'adset_id',
-    'adset_name',
-    'campaign_id',
-    'campaign_name',
-    'impressions',
-    'reach',
-    'clicks',
-    'cpc',
-    'cpm',
-    'ctr',
-    'spend',
-    'actions',
-    'action_values',
-    'cost_per_action_type',
-  ].join(',');
-  const params = new URLSearchParams({
-    level: 'ad',
-    fields,
-    time_range: JSON.stringify({ since, until }),
-    limit: '100',
-    access_token: token,
-  });
-  if (timeIncrement) params.set('time_increment', timeIncrement);
-  const rows = [];
-  let next = `https://graph.facebook.com/v20.0/${accountId}/insights?${params.toString()}`;
-  while (next) {
-    const response = await fetch(next);
-    const data = await response.json();
-    if (!response.ok || data.error) {
-      const err = data.error || {};
-      if (String(err.code) === '190') throw new Error('Token Meta Ads expirado ou invalido.');
-      throw new Error(err.message || `Erro Meta Ads ${response.status}`);
-    }
-    rows.push(...(data.data || []).map((row) => normalizeMetaInsightRow(row, ads.get(row.ad_id), goal)));
-    next = data.paging?.next || '';
-  }
-  return rows.sort((a, b) => b.spend - a.spend);
+async function fetchMetaInsights(clienteId, since, until, goal, ads, timeIncrement = '') {
+  const rows = await requestMeta(clienteId, 'insights', since, until, state.metaAds.goal, timeIncrement);
+  return rows.map((row) => normalizeMetaInsightRow(row, ads.get(row.ad_id), goal)).sort((a, b) => b.spend - a.spend);
 }
 
-async function fetchMetaAds(token, accountId) {
-  const fields = encodeURIComponent(['id', 'name', 'status', 'effective_status', 'campaign{id,name}', 'adset{id,name}', 'creative{id,name,thumbnail_url,image_url,object_story_spec}'].join(','));
-  const ads = new Map();
-  let next = `https://graph.facebook.com/v20.0/${accountId}/ads?fields=${fields}&effective_status=["ACTIVE"]&limit=100&access_token=${encodeURIComponent(token)}`;
-  while (next) {
-    const response = await fetch(next);
-    const data = await response.json();
-    if (!response.ok || data.error) {
-      const err = data.error || {};
-      if (String(err.code) === '190') throw new Error('Token Meta Ads expirado ou invalido.');
-      throw new Error(err.message || `Erro Meta Ads ${response.status}`);
-    }
-    for (const ad of data.data || []) ads.set(ad.id, ad);
-    next = data.paging?.next || '';
-  }
-  return ads;
+async function fetchMetaAds(clienteId, goalKey) {
+  const rows = await requestMeta(clienteId, 'ads', '', '', goalKey);
+  return new Map(rows.map((ad) => [ad.id, ad]));
 }
 
 function normalizeMetaInsightRow(row, ad = null, goal = metaGoalConfig.mensagens) {
@@ -6686,12 +6440,12 @@ function normalizeMetaInsightRow(row, ad = null, goal = metaGoalConfig.mensagens
     ad_name: ad?.name || row.ad_name,
     adset_id: row.adset_id,
     adset_name: ad?.adset?.name || row.adset_name,
-    status: ad?.effective_status || ad?.status || 'ACTIVE',
+    status: ad?.effective_status || ad?.status || 'UNKNOWN',
     thumb: extractMetaThumb(ad?.creative),
     date_start: row.date_start || '',
     date_stop: row.date_stop || '',
     impressions: Number(row.impressions || 0),
-    reach: Number(row.reach || 0),
+    reach: row.reach == null ? null : Number(row.reach),
     clicks: Number(row.clicks || 0),
     cpc: Number(row.cpc || 0),
     cpm: Number(row.cpm || 0),
@@ -6765,27 +6519,8 @@ function extractMetaActionValue(row, actionTypes) {
   return 0;
 }
 
-function summarizeMetaRows(rows) {
-  const totals = rows.reduce((acc, row) => {
-    acc.investimento += row.spend;
-    acc.impressoes += row.impressions;
-    acc.alcance += row.reach;
-    acc.cliques += row.clicks;
-    acc.leads += row.leads;
-    acc.mensagens += row.mensagens;
-    acc.vendas += row.vendas;
-    acc.faturamento += row.faturamento;
-    acc.resultados += row.resultados;
-    return acc;
-  }, { investimento: 0, impressoes: 0, alcance: 0, cliques: 0, leads: 0, mensagens: 0, vendas: 0, faturamento: 0, resultados: 0 });
-  totals.ctr = totals.impressoes ? (totals.cliques / totals.impressoes) * 100 : 0;
-  totals.cpc = totals.cliques ? totals.investimento / totals.cliques : 0;
-  totals.cpm = totals.impressoes ? (totals.investimento / totals.impressoes) * 1000 : 0;
-  totals.custo_por_lead = totals.leads ? totals.investimento / totals.leads : 0;
-  totals.custo_por_mensagem = totals.mensagens ? totals.investimento / totals.mensagens : 0;
-  totals.custo_por_venda = totals.vendas ? totals.investimento / totals.vendas : 0;
-  totals.custo_por_resultado = totals.resultados ? totals.investimento / totals.resultados : 0;
-  return totals;
+function summarizeMetaRows(rows, accountAggregate = null) {
+  return summarizeMetaRowsCore(rows, accountAggregate);
 }
 
 async function saveMetaReport() {
@@ -6806,14 +6541,14 @@ async function saveMetaReport() {
       ctr: Number(report.totals.ctr.toFixed(4)),
       cpc: Number(report.totals.cpc.toFixed(2)),
       leads: isLeads ? report.totals.resultados : report.totals.leads,
-      custo_por_lead: Number((isLeads ? report.totals.custo_por_resultado : report.totals.custo_por_lead).toFixed(2)),
+      custo_por_lead: report.totals.leads ? Number((isLeads ? report.totals.custo_por_resultado : report.totals.custo_por_lead).toFixed(2)) : null,
       mensagens: isMensagens ? report.totals.resultados : report.totals.mensagens,
-      custo_por_mensagem: Number((isMensagens ? report.totals.custo_por_resultado : report.totals.custo_por_mensagem).toFixed(2)),
+      custo_por_mensagem: report.totals.mensagens ? Number((isMensagens ? report.totals.custo_por_resultado : report.totals.custo_por_mensagem).toFixed(2)) : null,
       vendas: isVendas ? report.totals.resultados : report.totals.vendas,
-      faturamento_informado: isVendas ? Number(report.totals.faturamento.toFixed(2)) : 0,
-      roas: isVendas && report.totals.investimento ? Number((report.totals.faturamento / report.totals.investimento).toFixed(4)) : 0,
+      faturamento_informado: isVendas ? Number(report.totals.faturamento.toFixed(2)) : null,
+      roas: isVendas && report.totals.investimento > 0 ? Number((report.totals.faturamento / report.totals.investimento).toFixed(4)) : null,
       meta_ads_act_snapshot: report.accountId,
-      analise_estrategica: `Relatorio importado da Meta Ads API pelo The Midia Master. Objetivo: ${report.goal.label}.`,
+      analise_estrategica: `Fonte: Meta Graph API; canal: Meta Ads; período: ${report.since} a ${report.until}; fuso: America/Sao_Paulo; moeda: BRL; atualização: ${new Date().toISOString()}; janela de atribuição: configuração Meta não registrada. Receita informada: atribuída pela Meta, não conciliada com vendas operacionais. Alcance: ${report.totals.alcance == null ? 'indisponível' : 'único no nível da conta'}. Objetivo: ${report.goal.label}.`,
     });
     await loadAll();
     state.lastSavedRelatorioId = saved.id;
@@ -6934,6 +6669,7 @@ async function fetchGbpReport() {
     toast('Informe o perfil, endereco ou link do Google Maps.', 'error');
     return;
   }
+  if (!state.gbp.clienteId) { toast('Selecione um cliente.', 'error'); return; }
   if (!state.gbp.keyword.trim()) {
     toast('Informe a palavra-chave da busca.', 'error');
     return;
@@ -6947,7 +6683,7 @@ async function fetchGbpReport() {
   try {
     const { data, error } = await supabase.functions.invoke('gbp-analyze', {
       body: {
-        clienteId: state.gbp.clienteId || null,
+        clienteId: state.gbp.clienteId,
         businessQuery: state.gbp.businessQuery,
         keyword: state.gbp.keyword,
         radiusKm: state.gbp.radiusKm,
@@ -6969,6 +6705,7 @@ async function fetchGbpReport() {
     try {
       toast('Edge Function indisponivel. Usando API local...', 'error');
       state.gbp.report = await fetchLocalGbpReport({
+        clienteId: state.gbp.clienteId,
         businessQuery: state.gbp.businessQuery,
         keyword: state.gbp.keyword,
         radiusKm: state.gbp.radiusKm,
@@ -6983,18 +6720,7 @@ async function fetchGbpReport() {
         render();
         return;
       }
-      try {
-        state.gbp.report = await analyzeGbpInBrowser({
-          businessQuery: state.gbp.businessQuery,
-          keyword: state.gbp.keyword,
-          radiusKm: state.gbp.radiusKm,
-          gridSize: state.gbp.gridSize,
-          searchCenter: state.gbp.searchCenter,
-          searchRadiusMeters: state.gbp.searchRadiusMeters,
-        });
-      } catch (fallbackError) {
-        state.gbp.error = formatGbpError(fallbackError) || formatGbpError(localError) || formatGbpError(error) || 'Erro ao gerar diagnostico GMN.';
-      }
+      state.gbp.error = formatGbpError(localError) || formatGbpError(error) || 'Erro ao gerar diagnostico GMN.';
     }
   } finally {
     state.gbp.loading = false;
@@ -7035,7 +6761,7 @@ function isGbpCredentialError(error) {
 async function fetchLocalGbpReport(payload) {
   const response = await fetch('/api/gbp-analyze', {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${state.session?.access_token || ''}` },
     body: JSON.stringify(payload),
   });
   const data = await response.json().catch(() => ({}));
@@ -7043,174 +6769,11 @@ async function fetchLocalGbpReport(payload) {
   return data;
 }
 
-async function analyzeGbpInBrowser(payload) {
-  const service = await getGooglePlacesService();
-  const rawQuery = String(payload.businessQuery || '').trim();
-  const query = extractReadableQuery(rawQuery).trim();
-  const keyword = String(payload.keyword || '').trim();
-  if (!query) throw new Error('Informe o link, nome ou endereco do perfil.');
-  if (!keyword) throw new Error('Informe a palavra-chave.');
-
-  const candidates = await placesFind(service, {
-    query,
-    fields: ['place_id', 'name', 'formatted_address', 'geometry', 'rating', 'user_ratings_total', 'business_status', 'types', 'photos'],
-  });
-  const first = candidates?.[0];
-  if (!first) throw new Error('Perfil nao encontrado. Tente nome + cidade ou endereco completo.');
-
-  const detailsRaw = await placesDetails(service, {
-    placeId: first.place_id,
-    fields: ['place_id', 'name', 'formatted_address', 'geometry', 'rating', 'user_ratings_total', 'formatted_phone_number', 'international_phone_number', 'website', 'url', 'opening_hours', 'business_status', 'types', 'price_level', 'photos', 'reviews'],
-  });
-  const businessLocation = locationOf(detailsRaw.geometry.location);
-  const requestedCenter = extractMapCenter(payload.searchCenter || '');
-  const center = requestedCenter ? { lat: requestedCenter.lat, lng: requestedCenter.lng } : businessLocation;
-  const centerSource = requestedCenter ? requestedCenter.source : 'business';
-  const radiusKm = Math.max(0.5, Math.min(20, Number(payload.radiusKm) || 3));
-  const gridSize = Math.max(3, Math.min(9, Number(payload.gridSize) || 5));
-  const requestedSearchRadius = Number(payload.searchRadiusMeters);
-  const searchBiasMeters = Number.isFinite(requestedSearchRadius) && requestedSearchRadius > 0
-    ? Math.round(Math.min(50000, Math.max(100, requestedSearchRadius)))
-    : Math.round(Math.min(50000, Math.max(300, radiusKm * 1000)));
-  const points = gridPoints(center, radiusKm, gridSize);
-
-  const localResults = await mapWithConcurrency(points, 4, async (point) => {
-    const searchResults = await placesTextSearch(service, {
-      query: keyword,
-      location: new google.maps.LatLng(point.lat, point.lng),
-      radius: searchBiasMeters,
-    });
-    const results = (searchResults || []).slice(0, 20).map(normalizePlace);
-    const positionIndex = results.findIndex((place) => place.placeId === detailsRaw.place_id);
-    return { point, position: positionIndex >= 0 ? positionIndex + 1 : null, found: positionIndex >= 0, results };
-  });
-
-  const details = {
-    placeId: detailsRaw.place_id,
-    name: detailsRaw.name,
-    address: detailsRaw.formatted_address,
-    rating: detailsRaw.rating || null,
-    userRatingsTotal: detailsRaw.user_ratings_total || 0,
-    phone: detailsRaw.formatted_phone_number || detailsRaw.international_phone_number || '',
-    website: detailsRaw.website || '',
-    googleUrl: detailsRaw.url || '',
-    location: businessLocation,
-    businessStatus: detailsRaw.business_status || '',
-    types: detailsRaw.types || [],
-    priceLevel: detailsRaw.price_level ?? null,
-    photos: detailsRaw.photos?.length || 0,
-    weekdayText: detailsRaw.opening_hours?.weekday_text || [],
-    reviews: detailsRaw.reviews || [],
-    unansweredReviews: (detailsRaw.reviews || []).filter((review) => !review.author_reply).length,
-    totalReviewsFromApi: (detailsRaw.reviews || []).length,
-  };
-  const metrics = summarizeOwnRanking(localResults);
-  const competitors = summarizeCompetitors(localResults, center).filter((item) => item.placeId !== details.placeId);
-  const health = scoreGbpProfile(details, localResults, metrics);
-  const half = Math.max(1, Math.floor(gridSize / 2));
-
-  return {
-    generatedAt: new Date().toISOString(),
-    query,
-    keyword,
-    radiusKm,
-    searchBiasMeters,
-    gridStepKm: Number((radiusKm / half).toFixed(3)),
-    gridSize,
-    searchAreaKm2: Number((radiusKm * 2 * (radiusKm * 2)).toFixed(2)),
-    center,
-    centerSource,
-    distanceBusinessToCenterKm: Number(haversineKm(businessLocation, center).toFixed(3)),
-    warning: radiusKm > 3 ? `Raio de ${radiusKm} km gera uma area muito ampla para ranking local. Para comparar com relatorios de bairro, use 0,5 km ou 1 km.` : '',
-    details,
-    metrics,
-    localResults,
-    rankingMatrix: buildRankingMatrix(localResults),
-    competitors,
-    recommendations: buildGbpRecommendations(details, metrics, competitors),
-    health,
-  };
-}
-
-async function getGooglePlacesService() {
-  if (window.google?.maps?.places) return new google.maps.places.PlacesService(getGooglePlacesHost());
-  googlePlacesLoader ||= new Promise((resolve, reject) => {
-    const script = document.createElement('script');
-    script.src = `https://maps.googleapis.com/maps/api/js?key=${fixedGoogleMapsApiKey}&libraries=places&language=pt-BR`;
-    script.async = true;
-    script.onload = resolve;
-    script.onerror = () => reject(new Error('Nao foi possivel carregar a Google Maps JavaScript API.'));
-    document.head.appendChild(script);
-  });
-  await googlePlacesLoader;
-  if (!window.google?.maps?.places) throw new Error('Google Places nao carregou.');
-  return new google.maps.places.PlacesService(getGooglePlacesHost());
-}
-
-function getGooglePlacesHost() {
-  let host = document.getElementById('googlePlacesHost');
-  if (!host) {
-    host = document.createElement('div');
-    host.id = 'googlePlacesHost';
-    host.style.cssText = 'position:absolute;left:-9999px;top:-9999px;width:320px;height:240px;';
-    document.body.appendChild(host);
-  }
-  if (!googlePlacesMap) {
-    googlePlacesMap = new google.maps.Map(host, {
-      center: { lat: -22.9, lng: -47.1 },
-      zoom: 13,
-      disableDefaultUI: true,
-    });
-  }
-  return googlePlacesMap;
-}
-
-function placesFind(service, request) {
-  return withTimeout(new Promise((resolve, reject) => {
-    service.findPlaceFromQuery(request, (results, status) => {
-      if (status === google.maps.places.PlacesServiceStatus.OK || status === google.maps.places.PlacesServiceStatus.ZERO_RESULTS) resolve(results || []);
-      else reject(new Error(`Google Places: ${status}`));
-    });
-  }), 20000, 'Tempo esgotado ao localizar o perfil.');
-}
-
-function placesDetails(service, request) {
-  return withTimeout(new Promise((resolve, reject) => {
-    service.getDetails(request, (result, status) => {
-      if (status === google.maps.places.PlacesServiceStatus.OK) resolve(result);
-      else reject(new Error(`Google Details: ${status}`));
-    });
-  }), 20000, 'Tempo esgotado ao buscar dados do perfil.');
-}
-
-function placesTextSearch(service, request) {
-  return withTimeout(new Promise((resolve, reject) => {
-    service.textSearch(request, (results, status) => {
-      if (status === google.maps.places.PlacesServiceStatus.OK || status === google.maps.places.PlacesServiceStatus.ZERO_RESULTS) resolve(results || []);
-      else reject(new Error(`Google Text Search: ${status}`));
-    });
-  }), 25000, 'Tempo esgotado em um ponto do grid.');
-}
-
 function withTimeout(promise, ms, message) {
   return Promise.race([
     promise,
     new Promise((_, reject) => setTimeout(() => reject(new Error(message)), ms)),
   ]);
-}
-
-async function mapWithConcurrency(items, concurrency, worker) {
-  const results = new Array(items.length);
-  let cursor = 0;
-  const runners = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
-    while (cursor < items.length) {
-      const index = cursor;
-      cursor += 1;
-      results[index] = await worker(items[index], index);
-    }
-  });
-  await Promise.all(runners);
-  return results;
 }
 
 function extractReadableQuery(input) {

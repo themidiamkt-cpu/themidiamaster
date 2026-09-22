@@ -1,3 +1,4 @@
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
@@ -5,13 +6,25 @@ const corsHeaders = {
 };
 
 type Point = { lat: number; lng: number; x?: number; y?: number };
-const defaultGoogleMapsApiKey = 'AIzaSyAyH7teIp1Xjprln7TaA1i_dIY8TB0_HgE';
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
+  if (req.method !== 'POST') return json({ error: 'Metodo nao permitido.' }, 405);
+  const bearer = /^Bearer (.+)$/i.exec(req.headers.get('authorization') || '')?.[1];
+  if (!bearer) return json({ error: 'Sessao obrigatoria.' }, 401);
+  const url = Deno.env.get('SUPABASE_URL');
+  const anon = Deno.env.get('SUPABASE_ANON_KEY');
+  if (!url || !anon) return json({ error: 'Supabase nao configurado.' }, 503);
+  const db = createClient(url, anon, { global: { headers: { Authorization: `Bearer ${bearer}` } }, auth: { persistSession: false } });
+  const { data: { user }, error: authError } = await db.auth.getUser(bearer);
+  if (authError || !user) return json({ error: 'Sessao invalida.' }, 401);
   try {
     const payload = await req.json();
-    const apiKey = payload.apiKey || Deno.env.get('GOOGLE_MAPS_API_KEY') || defaultGoogleMapsApiKey;
+    if (!/^[0-9a-f-]{36}$/i.test(String(payload.clienteId || ''))) return json({ error: 'Cliente obrigatorio.' }, 400);
+    const { data: client, error } = await db.from('clientes').select('id').eq('id', payload.clienteId).maybeSingle();
+    if (error) return json({ error: 'Falha ao verificar cliente.' }, 503);
+    if (!client) return json({ error: 'Acesso ao cliente negado.' }, 403);
+    const apiKey = Deno.env.get('GOOGLE_MAPS_API_KEY');
     if (!apiKey) throw new Error('GOOGLE_MAPS_API_KEY nao configurada nos secrets.');
 
     const report = await analyzeGbp(payload, apiKey);
