@@ -16,6 +16,7 @@ import { metaClienteService } from './services/metaClienteService.js';
 import { vendaClienteService } from './services/vendaClienteService.js';
 import { metaAdsDailyInsightService } from './services/metaAdsDailyInsightService.js';
 import { metaAdsAccountHealthService } from './services/metaAdsAccountHealthService.js';
+import { metaAdsSyncItemService } from './services/metaAdsSyncItemService.js';
 import { gmnAnaliseService } from './services/gmnAnaliseService.js';
 import { crmWebhookLogService } from './services/crmWebhookLogService.js';
 import { confirmDelete, date, emptyState, escapeHtml, label, loadingState, money, number, pageHeader, renderLucide, statCard, statusBadge, toast } from './components/ui.js';
@@ -29,8 +30,8 @@ const initialMetaDateRange = getDefaultDateRange();
 const whatsappWebhookUrl = 'https://automacao2.themidiamarketing.com.br/webhook/conectar-cliente';
 const mainAdminEmail = 'themidiamkt@gmail.com';
 const viewStorageKey = 'theMidiaMaster.activeView';
-const adminViews = ['dashboard', 'dashboardClientes', 'clientes', 'relatorios', 'crm', 'crmFollowups', 'metaAds', 'gbp', 'diario', 'tarefas', 'playbooks', 'equipe', 'metas', 'alertas', 'config'];
-const trafficManagerViews = ['dashboardClientes', 'clientes', 'metaAds', 'gbp', 'diario', 'tarefas', 'playbooks', 'metas', 'alertas'];
+const adminViews = ['dashboard', 'dashboardClientes', 'clientes', 'relatorios', 'crm', 'crmFollowups', 'metaAds', 'googleAds', 'gbp', 'diario', 'tarefas', 'playbooks', 'equipe', 'metas', 'alertas', 'config'];
+const trafficManagerViews = ['dashboardClientes', 'clientes', 'metaAds', 'googleAds', 'gbp', 'diario', 'tarefas', 'playbooks', 'metas', 'alertas'];
 const teamViews = trafficManagerViews;
 
 const state = {
@@ -53,6 +54,8 @@ const state = {
   metaAdsDailyInsightsMissingTable: false,
   metaAdsAccountHealth: [],
   metaAdsAccountHealthMissingTable: false,
+  metaAdsSyncItems: [],
+  metaAdsSyncItemsMissingTable: false,
   gmnAnalises: [],
   gmnAnalisesMissingTable: false,
   dashboardClientesClienteId: 'all',
@@ -110,6 +113,9 @@ const state = {
     selectedSavedId: null,
   },
   googleAds: {
+    clienteId: '',
+    since: initialMetaDateRange.since,
+    until: initialMetaDateRange.until,
     loading: false,
     error: '',
     report: null,
@@ -234,7 +240,7 @@ async function loadAll() {
 
     if (isMainAdmin()) {
       const dashboardRange = getFourWeeksRange();
-      const [clientes, leads, crmWebhookLogs, campanhas, relatorios, vendas, metaAdsDailyInsights, metaAdsAccountHealth, gmnAnalises, tarefas, diarios, equipe, equipeClientes, alertas, metas] = await withTimeout(Promise.all([
+      const [clientes, leads, crmWebhookLogs, campanhas, relatorios, vendas, metaAdsDailyInsights, metaAdsAccountHealth, metaAdsSyncItems, gmnAnalises, tarefas, diarios, equipe, equipeClientes, alertas, metas] = await withTimeout(Promise.all([
         clienteService.list({ order: 'nome_empresa', ascending: true }),
         leadCrmService.list(),
         safeCrmWebhookLogsList(),
@@ -243,6 +249,7 @@ async function loadAll() {
         safeVendasList(),
         safeMetaAdsDailyInsightsList(dashboardRange.since),
         safeMetaAdsAccountHealthList(),
+        safeMetaAdsSyncItemsList(),
         safeGmnAnalisesList(),
         tarefaService.list({ columns: '*, clientes(nome_empresa)' }),
         safeDiaryList(),
@@ -251,26 +258,27 @@ async function loadAll() {
         safeAlertasList(),
         safeList(() => metaClienteService.listAll()),
       ]), 12000, 'O Supabase demorou para carregar os dados. Mostrando o painel em modo vazio ate atualizar.');
-      Object.assign(state, { clientes, leads, crmWebhookLogs, campanhas, relatorios, vendas, metaAdsDailyInsights, metaAdsAccountHealth, gmnAnalises, tarefas, diarios, equipe, equipeClientes, alertas, metas });
+      Object.assign(state, { clientes, leads, crmWebhookLogs, campanhas, relatorios, vendas, metaAdsDailyInsights, metaAdsAccountHealth, metaAdsSyncItems, gmnAnalises, tarefas, diarios, equipe, equipeClientes, alertas, metas });
       updateAlertasBadge();
       setupCrmRealtime();
       return;
     }
 
     const dashboardRange = getFourWeeksRange();
-    const [clientes, relatorios, vendas, metaAdsDailyInsights, metaAdsAccountHealth, gmnAnalises, tarefas, diarios, alertas, metas] = await withTimeout(Promise.all([
+    const [clientes, relatorios, vendas, metaAdsDailyInsights, metaAdsAccountHealth, metaAdsSyncItems, gmnAnalises, tarefas, diarios, alertas, metas] = await withTimeout(Promise.all([
       clienteService.list({ order: 'nome_empresa', ascending: true }),
       relatorioService.list({ columns: '*, clientes(nome_empresa, meta_ads_act)' }),
       safeVendasList(),
       safeMetaAdsDailyInsightsList(dashboardRange.since),
       safeMetaAdsAccountHealthList(),
+      safeMetaAdsSyncItemsList(),
       safeGmnAnalisesList(),
       tarefaService.list({ columns: '*, clientes(nome_empresa)' }),
       safeDiaryList(),
       safeAlertasList(),
       safeList(() => metaClienteService.listAll()),
     ]), 12000, 'O Supabase demorou para carregar os dados. Mostrando o painel em modo vazio ate atualizar.');
-    const scoped = scopeDataToVisibleClients({ clientes, relatorios, vendas, metaAdsDailyInsights, metaAdsAccountHealth, gmnAnalises, tarefas, diarios, alertas, metas });
+    const scoped = scopeDataToVisibleClients({ clientes, relatorios, vendas, metaAdsDailyInsights, metaAdsAccountHealth, metaAdsSyncItems, gmnAnalises, tarefas, diarios, alertas, metas });
     Object.assign(state, { ...scoped, leads: [], crmWebhookLogs: [], campanhas: [], equipe: [], equipeClientes: [] });
     updateAlertasBadge();
     teardownCrmRealtime();
@@ -307,6 +315,7 @@ function scopeDataToVisibleClients(data) {
     vendas: (data.vendas || []).filter(byClient),
     metaAdsDailyInsights: (data.metaAdsDailyInsights || []).filter(byClient),
     metaAdsAccountHealth: (data.metaAdsAccountHealth || []).filter(byClient),
+    metaAdsSyncItems: (data.metaAdsSyncItems || []).filter(byClient),
     gmnAnalises: (data.gmnAnalises || []).filter(byClient),
     tarefas: (data.tarefas || []).filter(byClient),
     diarios: (data.diarios || []).filter(byClient),
@@ -349,8 +358,26 @@ async function safeMetaAdsDailyInsightsList(since) {
     state.metaAdsDailyInsightsMissingTable = false;
     return insights;
   } catch (error) {
-    if (['42P01', 'PGRST205'].includes(error?.code) || String(error?.message || '').includes('meta_ads_daily_insights')) {
+    if (['42P01', 'PGRST205'].includes(error?.code) || String(error?.message || '').includes('meta_ads_facts')) {
       state.metaAdsDailyInsightsMissingTable = true;
+      try { return await metaAdsDailyInsightService.listLegacyRecent(since); }
+      catch (legacyError) {
+        if (['42P01', 'PGRST205'].includes(legacyError?.code)) return [];
+        throw legacyError;
+      }
+    }
+    throw error;
+  }
+}
+
+async function safeMetaAdsSyncItemsList() {
+  try {
+    const rows = await metaAdsSyncItemService.listRecent();
+    state.metaAdsSyncItemsMissingTable = false;
+    return rows;
+  } catch (error) {
+    if (['42P01', 'PGRST205'].includes(error?.code) || String(error?.message || '').includes('meta_ads_sync_items')) {
+      state.metaAdsSyncItemsMissingTable = true;
       return [];
     }
     throw error;
@@ -669,6 +696,7 @@ function render() {
     campanhas: renderCampanhas,
     relatorios: renderRelatorios,
     metaAds: renderMetaAds,
+    googleAds: renderGoogleAdsPage,
     gbp: renderGbp,
     diario: renderDiario,
     tarefas: renderTarefas,
@@ -1105,7 +1133,8 @@ function renderDashboardClientes() {
   return `
     ${pageHeader('Dashboard Clientes', 'Comparativo das ultimas 4 semanas com Meta Ads e vendas por cliente.', `<button class="secondary-button" data-action="export" data-entity="vendas"><i data-lucide="download"></i>CSV vendas</button><button class="button" data-action="new" data-entity="vendas"><i data-lucide="plus"></i>Lancar venda</button>`)}
     ${state.vendasMissingTable ? `<div class="state"><strong>Tabela de vendas ainda nao existe</strong><span>Rode a migration 20260617_vendas_cliente.sql no Supabase para salvar vendas manuais.</span></div>` : ''}
-    ${state.metaAdsDailyInsightsMissingTable ? `<div class="state"><strong>Tabela Meta Ads diaria ainda nao existe</strong><span>Rode a migration meta_ads_daily_insights no Supabase e aguarde o cron preencher os dados.</span></div>` : ''}
+    ${state.metaAdsDailyInsightsMissingTable ? `<div class="state"><strong>Historico canonico indisponivel</strong><span>A migration meta_ads_sync_observability ainda não está aplicada. Exibindo dados legados sem cobertura verificada.</span></div>` : ''}
+    ${state.metaAdsSyncItemsMissingTable ? `<div class="state"><strong>Status de sincronizacao indisponivel</strong><span>Sem a migration de observabilidade, falhas por conta e dias ausentes não podem ser confirmados.</span></div>` : ''}
     <section class="panel client-dashboard-filters">
       <label>Cliente
         <select data-action="client-dashboard-client">
@@ -1134,6 +1163,7 @@ function renderDashboardClientes() {
 function renderDashboardClienteRow(row, range) {
   const isSalesGoal = row.salesSource === 'meta';
   const weeks = getDashboardClienteWeeks(row.cliente, range);
+  const sync = getLatestMetaSyncItem(row.cliente.id);
   return `
     <article class="client-metrics-card">
       <div class="client-metrics-header">
@@ -1145,11 +1175,24 @@ function renderDashboardClienteRow(row, range) {
           ${isSalesGoal ? '<span class="status-badge status-ativo">Vendas Meta Ads</span>' : ''}
           <span class="status-badge status-${escapeHtml(row.cliente.status || 'ativo')}">${escapeHtml(label(row.cliente.status || 'ativo'))}</span>
           ${isSalesGoal ? '' : `<button class="secondary-button" data-action="new" data-entity="vendas" data-cliente="${row.cliente.id}" type="button"><i data-lucide="plus"></i>Venda</button>`}
+          ${isMainAdmin() && row.cliente.meta_ads_act ? `<label>Dia a reprocessar <input type="date" data-meta-reprocess-date="${row.cliente.id}" value="${getDefaultDateRange().until}"></label><button class="secondary-button" data-action="reprocess-meta-day" data-cliente="${row.cliente.id}" type="button">Reprocessar</button>` : ''}
         </div>
       </div>
+      <p class="muted">${renderMetaSyncStatus(sync, row.coverage)}</p>
       ${renderDashboardClienteWeeklyTable(weeks, isSalesGoal)}
     </article>
   `;
+}
+
+function getLatestMetaSyncItem(clienteId) {
+  return state.metaAdsSyncItems.filter((item) => item.cliente_id === clienteId)
+    .sort((a, b) => String(b.started_at || '').localeCompare(String(a.started_at || '')))[0] || null;
+}
+
+function renderMetaSyncStatus(item, coverage) {
+  if (!item) return `Sincronização: nunca confirmada · ${coverage.missingDays} dia(s) sem consulta no período`;
+  const finished = item.finished_at ? new Date(item.finished_at).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }) : 'em andamento';
+  return `Sincronização ${escapeHtml(item.status)} · última atualização ${escapeHtml(finished)} · ${Number(item.missing_days || 0)} dia(s) não consultado(s), ${Number(item.no_delivery_days || 0)} sem veiculação · ${Number(coverage.missingDays || 0)} dia(s) ausente(s) no período exibido${item.error_code ? ` · falha: ${escapeHtml(item.error_code)}` : ''}`;
 }
 
 function renderDashboardClienteWeeklyTable(weeks) {
@@ -1192,7 +1235,7 @@ function getDashboardClienteRows(range) {
         score: metrics.revenue + metrics.spend + metrics.sales + metrics.clicks,
       };
     })
-    .filter((row) => row.score > 0 || state.dashboardClientesClienteId !== 'all')
+    .filter((row) => row.score > 0 || getLatestMetaSyncItem(row.cliente.id)?.status !== 'complete' || state.dashboardClientesClienteId !== 'all')
     .sort((a, b) => (b.revenue || b.spend || 0) - (a.revenue || a.spend || 0));
 }
 
@@ -2611,9 +2654,23 @@ function renderMetaReportBody(report) {
   return `<div class="meta-ad-list">${report.rows.map((row) => renderMetaAdCard(row, report.goal)).join('') || emptyState('Sem anuncios', 'Nenhum dado retornado pela Meta Ads API.')}</div>`;
 }
 
+function renderGoogleAdsPage() {
+  const clients = state.clientes.filter((client) => client.google_ads_id);
+  return `${pageHeader('Google Ads', 'Resultados medidos pela Google Ads API para a conta autorizada.')}
+    <section class="panel screen-only">
+      <div class="form-grid">
+        <label>Cliente<select data-action="google-client"><option value="">Selecione</option>${clients.map((client) => `<option value="${client.id}" ${state.googleAds.clienteId === client.id ? 'selected' : ''}>${escapeHtml(client.nome_empresa)}</option>`).join('')}</select></label>
+        <label>Início<input class="input" type="date" data-action="google-since" value="${escapeHtml(state.googleAds.since)}"></label>
+        <label>Fim<input class="input" type="date" data-action="google-until" value="${escapeHtml(state.googleAds.until)}"></label>
+        <div class="form-actions"><button class="button" data-action="google-fetch" type="button">Consultar Google Ads</button></div>
+      </div>
+    </section>
+    ${renderGoogleAdsSection()}`;
+}
+
 function renderGoogleAdsSection() {
   const { loading, error, report } = state.googleAds;
-  if (!loading && !error && !report) return '';
+  if (!loading && !error && !report) return emptyState('Nenhum relatório carregado', 'Selecione um cliente com Google Ads e um período.');
 
   if (loading) {
     return `
@@ -2645,6 +2702,8 @@ function renderGoogleAdsSection() {
 
   const t = report.totals;
   const impressionShareCol = (v) => v != null ? `${v.toFixed(1)}%` : '—';
+  const googleMoney = (value) => report.currency ? new Intl.NumberFormat('pt-BR', { style: 'currency', currency: report.currency }).format(Number(value || 0)) : Number(value || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' (moeda indisponível)';
+  const googleCount = (value) => Number(value || 0).toLocaleString('pt-BR', { maximumFractionDigits: 2 });
 
   return `
     <section class="panel google-ads-section print-section">
@@ -2653,17 +2712,27 @@ function renderGoogleAdsSection() {
           <p class="eyebrow">Google Ads — ${escapeHtml(report.clienteName || report.customerId)}</p>
           <h2>Campanhas Google Ads</h2>
           <p class="muted">${escapeHtml(report.since)} a ${escapeHtml(report.until)} · ID ${escapeHtml(report.customerId)}</p>
+          <p class="muted">Fonte: ${escapeHtml(report.source)} ${escapeHtml(report.apiVersion)} · ${escapeHtml(report.currency || 'moeda indisponível')} · fuso ${escapeHtml(report.timezone || 'indisponível')} · consulta ${escapeHtml(report.updatedAt || 'indisponível')}</p>
+          <p class="muted">Totais da conta inteira; detalhamento das ${report.campaigns.length} campanhas de maior gasto entre ${report.campaignCount} campanhas.</p>
         </div>
       </div>
 
       <div class="meta-kpi-grid">
-        ${metaKpi('Investimento Google', money(t.spend), '', false)}
+        ${metaKpi('Investimento Google', googleMoney(t.spend), '', false)}
+        ${metaKpi('Conversões Google', googleCount(t.conversions), '', false)}
+        ${metaKpi('Valor de conversão', googleMoney(t.conversionValue), '', false)}
+        ${metaKpi('Custo por conversão', t.costPerConversion == null ? '—' : googleMoney(t.costPerConversion), '', false)}
+        ${metaKpi('ROAS Google', t.roas == null ? '—' : t.roas.toFixed(2) + 'x', '', false)}
         ${metaKpi('Impressoes Google', number(t.impressions), '', false)}
         ${metaKpi('Cliques Google', number(t.clicks), '', false)}
         ${metaKpi('CTR Google', `${t.ctr.toFixed(2)}%`, '', false)}
-        ${metaKpi('CPC medio', money(t.cpc), '', true)}
-        ${metaKpi('CPM medio', money(t.cpm), '', true)}
+        ${metaKpi('CPC medio', googleMoney(t.cpc), '', true)}
+        ${metaKpi('CPM medio', googleMoney(t.cpm), '', true)}
       </div>
+      ${report.partialErrors?.length ? `<div class="state"><strong>Consulta parcial</strong><span>${escapeHtml(report.partialErrors.join(' '))}</span></div>` : ''}
+      ${report.conversionActions?.length ? `<p class="muted">Ações de conversão: ${report.conversionActions.map((a) => `${escapeHtml(a.name)} (${googleCount(a.conversions)}, ${googleMoney(a.conversionValue)})`).join(' · ')}. Este detalhamento não é somado novamente aos totais.</p>` : ''}
+      ${report.daily?.length ? `<p class="muted">Histórico diário: ${report.daily.length} dias consultados (${report.daily.filter((day) => day.coverage === 'no_delivery').length} sem veiculação). Persistência: ${escapeHtml(report.historyStatus || 'não informada')}. Última consulta: ${escapeHtml(report.updatedAt)}.</p>` : ''}
+      ${report.terms?.length ? `<div class="panel"><h3>Termos de pesquisa para análise</h3><p class="muted">Oportunidades para revisão manual; nenhuma campanha é alterada automaticamente.</p>${report.terms.map((term) => `<p>${escapeHtml(term.text)} · ${googleMoney(term.spend)} · ${googleCount(term.conversions)} conversões · ${googleMoney(term.conversionValue)} valor</p>`).join('')}</div>` : ''}
 
       ${report.campaigns.length ? `
         <div class="table-wrap" style="margin-top:1.5rem">
@@ -2674,6 +2743,8 @@ function renderGoogleAdsSection() {
                 <th>Investimento</th>
                 <th>Impressoes</th>
                 <th>Cliques</th>
+                <th>Conversões</th>
+                <th>Valor conv.</th>
                 <th>CTR</th>
                 <th>CPC</th>
                 <th>CPM</th>
@@ -2686,12 +2757,14 @@ function renderGoogleAdsSection() {
               ${report.campaigns.map((c) => `
                 <tr>
                   <td>${escapeHtml(c.name)}</td>
-                  <td>${money(c.spend)}</td>
+                  <td>${googleMoney(c.spend)}</td>
                   <td>${number(c.impressions)}</td>
                   <td>${number(c.clicks)}</td>
+                  <td>${googleCount(c.conversions)}</td>
+                  <td>${googleMoney(c.conversionValue)}</td>
                   <td>${c.ctr.toFixed(2)}%</td>
-                  <td>${money(c.cpc)}</td>
-                  <td>${money(c.cpm)}</td>
+                  <td>${googleMoney(c.cpc)}</td>
+                  <td>${googleMoney(c.cpm)}</td>
                   <td>${impressionShareCol(c.impressionShare)}</td>
                   <td>${impressionShareCol(c.lostBudget)}</td>
                   <td>${impressionShareCol(c.lostRank)}</td>
@@ -2712,6 +2785,8 @@ function renderGoogleAdsSection() {
                   <th>Investimento</th>
                   <th>Impressoes</th>
                   <th>Cliques</th>
+                  <th>Conversões</th>
+                  <th>Valor conv.</th>
                   <th>CTR</th>
                   <th>CPC</th>
                 </tr>
@@ -2721,11 +2796,13 @@ function renderGoogleAdsSection() {
                   <tr>
                     <td>${escapeHtml(k.text)}</td>
                     <td>${escapeHtml(k.matchType)}</td>
-                    <td>${money(k.spend)}</td>
+                    <td>${googleMoney(k.spend)}</td>
                     <td>${number(k.impressions)}</td>
                     <td>${number(k.clicks)}</td>
+                    <td>${googleCount(k.conversions)}</td>
+                    <td>${googleMoney(k.conversionValue)}</td>
                     <td>${k.ctr.toFixed(2)}%</td>
-                    <td>${money(k.cpc)}</td>
+                    <td>${googleMoney(k.cpc)}</td>
                   </tr>`).join('')}
               </tbody>
             </table>
@@ -4381,6 +4458,22 @@ function bindGlobalActions() {
     }
     if (action === 'client-dashboard-client') el.addEventListener('change', () => { state.dashboardClientesClienteId = el.value || 'all'; render(); });
     if (action === 'client-dashboard-origin') el.addEventListener('change', () => { state.dashboardClientesOrigem = el.value || 'all'; render(); });
+    if (action === 'reprocess-meta-day') el.addEventListener('click', async () => {
+      const clienteId = el.dataset.cliente;
+      const day = document.querySelector(`[data-meta-reprocess-date="${clienteId}"]`)?.value;
+      if (!day) return toast('Selecione um dia para reprocessar.', 'error');
+      el.disabled = true;
+      try {
+        await metaAdsSyncItemService.reprocess(clienteId, day, day);
+        await loadAll();
+        render();
+        toast('Dia reprocessado; cobertura atualizada.');
+      } catch (error) {
+        toast(error.message || 'Reprocessamento incompleto. Consulte o status.', 'error');
+        await loadAll();
+        render();
+      } finally { el.disabled = false; }
+    });
     if (action === 'refresh-client-meta-costs') el.addEventListener('click', () => loadClientMetaCosts(true));
     if (action === 'task-view') el.addEventListener('click', () => { state.taskView = el.dataset.view; render(); });
     if (action === 'task-responsible-filter') el.addEventListener('change', () => { state.taskResponsibleFilter = el.value || 'all'; render(); });
@@ -4421,6 +4514,14 @@ function bindGlobalActions() {
     if (action === 'meta-since') el.addEventListener('change', () => { setSharedMetaDateRange({ since: el.value }); state.metaAds.report = null; });
     if (action === 'meta-until') el.addEventListener('change', () => { setSharedMetaDateRange({ until: el.value }); state.metaAds.report = null; });
     if (action === 'meta-fetch') el.addEventListener('click', fetchMetaAdsReport);
+    if (action === 'google-client') el.addEventListener('change', () => { state.googleAds.clienteId = el.value; state.googleAds.report = null; render(); });
+    if (action === 'google-since') el.addEventListener('change', () => { state.googleAds.since = el.value; });
+    if (action === 'google-until') el.addEventListener('change', () => { state.googleAds.until = el.value; });
+    if (action === 'google-fetch') el.addEventListener('click', () => {
+      const client = state.clientes.find((item) => item.id === state.googleAds.clienteId);
+      if (!client) { toast('Selecione um cliente Google Ads.', 'error'); return; }
+      fetchGoogleAdsReport(client, state.googleAds.since, state.googleAds.until);
+    });
     if (action === 'meta-save-report') el.addEventListener('click', saveMetaReport);
     if (action === 'meta-report-copy') el.addEventListener('click', copyMetaWhatsappReport);
     if (action === 'meta-report-popup') el.addEventListener('click', openMetaWhatsappReportPopup);
@@ -6351,7 +6452,7 @@ async function fetchLocalGoogleAdsReport(payload) {
     body: JSON.stringify(payload),
   });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok || data?.error) throw new Error(data.error || 'API Google Ads indisponivel. Configure as credenciais no .env.');
+  if (!response.ok || data?.error) throw new Error(data.error || 'API Google Ads indisponível.');
   return data;
 }
 

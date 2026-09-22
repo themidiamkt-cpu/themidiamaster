@@ -1,3 +1,4 @@
+import { fetchGraphJson, resolveSyncPlan, rowsToFacts, runClients, safeErrorCode } from './sync-core.js';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0';
 
 const corsHeaders = {
@@ -40,93 +41,116 @@ type MetaRow = {
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
-
+  if (req.method !== 'POST') return json({ ok: false, error: 'Metodo nao permitido.' }, 405);
+  if (!assertBackfillSecret(req)) return json({ ok: false, error: 'Cron nao autorizado.' }, 401);
+  const token = Deno.env.get('META_ACCESS_TOKEN') || Deno.env.get('META_ADS_ACCESS_TOKEN');
+  const url = Deno.env.get('SUPABASE_URL');
+  const key = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || Deno.env.get('SERVICE_ROLE_KEY');
+  if (!token || !url || !key) return json({ ok: false, error: 'Configuracao do sincronizador incompleta.' }, 503);
+  const db = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
+  let runId: string | null = null;
   try {
-    if (req.method !== 'POST') return json({ ok: false, error: 'Metodo nao permitido.' }, 405);
-    if (!assertBackfillSecret(req)) return json({ ok: false, error: 'Cron nao autorizado.' }, 401);
     const payload = await safeJson(req);
-
-    const token = Deno.env.get('META_ACCESS_TOKEN') || Deno.env.get('META_ADS_ACCESS_TOKEN');
-    const supabaseUrl = Deno.env.get('SUPABASE_URL');
-    const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || Deno.env.get('SERVICE_ROLE_KEY');
-    if (!token) throw new Error('META_ACCESS_TOKEN nao configurado nos secrets da Edge Function.');
-    if (!supabaseUrl || !serviceRoleKey) throw new Error('SUPABASE_URL ou SERVICE_ROLE_KEY nao configurado.');
-
-    const supabase = createClient(supabaseUrl, serviceRoleKey, {
-      auth: { persistSession: false, autoRefreshToken: false },
-    });
-    const range = resolveRange(payload);
-    const { data: clients, error: clientsError } = await supabase
-      .from('clientes')
-      .select('id,nome_empresa,meta_ads_act,segmento,status,observacoes')
-      .not('meta_ads_act', 'is', null)
-      .neq('status', 'cancelado')
-      .order('nome_empresa', { ascending: true });
-    if (clientsError) throw clientsError;
-
-    const filteredClients = (clients || [])
-      .filter((client: ClientRow) => String(client.meta_ads_act || '').trim())
-      .filter((client: ClientRow) => !payload.clienteId || client.id === payload.clienteId);
-
-    if (!filteredClients.length) {
-      return json({
-        ok: true,
-        mode: payload.mode || 'yesterday',
-        since: range.since,
-        until: range.until,
-        clients: 0,
-        rows: 0,
-        results: [],
-      });
+    const plan = resolveSyncPlan(payload, new Date(), Number(Deno.env.get('META_SYNC_ROLLING_DAYS') || 7), Number(Deno.env.get('META_SYNC_PAGE_DAYS') || 7));
+    const { data: run, error: runError } = await db.from('meta_ads_sync_runs').insert({
+      mode: plan.mode, requested_since: plan.since, requested_until: plan.until,
+      page_since: plan.pageSince, page_until: plan.pageUntil, next_cursor: plan.nextCursor,
+    }).select('id').single();
+    if (runError || !run) throw new Error('DATABASE_RUN_INSERT');
+    runId = run.id;
+    let query = db.from('clientes').select('id,nome_empresa,meta_ads_act,segmento,status,observacoes').not('meta_ads_act', 'is', null).neq('status', 'cancelado').order('id', { ascending: true });
+    if (payload.clienteId) {
+      if (!/^[0-9a-f-]{36}$/i.test(String(payload.clienteId))) throw new Error('INVALID_CLIENT');
+      query = query.eq('id', payload.clienteId);
     }
-
-    const { data: metas } = await supabase
-      .from('metas_cliente')
-      .select('cliente_id,objetivo,ativo,created_at')
-      .in('cliente_id', filteredClients.map((client: ClientRow) => client.id));
-
+    const { data: clients, error: clientsError } = await query;
+    if (clientsError) throw new Error('DATABASE_CLIENT_LIST');
+    const selected = (clients || []).filter((client: ClientRow) => String(client.meta_ads_act || '').trim());
+    const { data: metas, error: goalsError } = selected.length
+      ? await db.from('metas_cliente').select('cliente_id,objetivo,ativo,created_at').in('cliente_id', selected.map((client: ClientRow) => client.id))
+      : { data: [], error: null };
+    if (goalsError) throw new Error('DATABASE_GOAL_LIST');
     const goalByClientId = new Map<string, GoalKey>();
-    (metas || [])
-      .filter((meta: MetaRow) => meta.ativo !== false)
+    (metas || []).filter((meta: MetaRow) => meta.ativo !== false)
       .sort((a: MetaRow, b: MetaRow) => String(b.created_at || '').localeCompare(String(a.created_at || '')))
-      .forEach((meta: MetaRow) => {
-        if (!goalByClientId.has(meta.cliente_id) && isGoalKey(meta.objetivo)) goalByClientId.set(meta.cliente_id, meta.objetivo);
-      });
-
-    const results: Array<{ cliente: string; accountId: string; objetivo: GoalKey; rows?: number; health?: string; error?: string }> = [];
-    for (const client of filteredClients as ClientRow[]) {
-      const goalKey = goalByClientId.get(client.id) || inferGoal(client);
-      const accountId = normalizeMetaAccount(client.meta_ads_act || '');
-      try {
-        await syncAccountHealth(supabase, token, client, accountId);
-        const rows = await fetchMetaInsights(token, accountId, range.since, range.until);
-        const payloads = summarizeDailyRows(rows, client, goalKey);
-        if (payloads.length) {
-          const { error } = await supabase
-            .from('meta_ads_daily_insights')
-            .upsert(payloads, { onConflict: 'cliente_id,meta_ads_act,data,objetivo' });
-          if (error) throw error;
-        }
-        results.push({ cliente: client.nome_empresa, accountId, objetivo: goalKey, rows: payloads.length, health: 'ok' });
-      } catch (error) {
-        await saveAccountHealthError(supabase, client, accountId, error?.message || 'Falha ao sincronizar');
-        results.push({ cliente: client.nome_empresa, accountId, objetivo: goalKey, error: error?.message || 'Falha ao sincronizar' });
-      }
-    }
-
-    return json({
-      ok: true,
-      mode: payload.mode || 'yesterday',
-      since: range.since,
-      until: range.until,
-      clients: filteredClients.length,
-      rows: results.reduce((sum, item) => sum + Number(item.rows || 0), 0),
-      results,
+      .forEach((meta: MetaRow) => { if (!goalByClientId.has(meta.cliente_id) && isGoalKey(meta.objetivo)) goalByClientId.set(meta.cliente_id, meta.objetivo); });
+    const results = await runClients(selected, 2, async (client: ClientRow) => {
+      const goal = goalByClientId.get(client.id) || inferGoal(client);
+      return syncClient(db, token, runId!, client, goal, plan);
     });
+    const counts = {
+      clients_total: selected.length,
+      clients_complete: results.filter((r: any) => r.status === 'complete').length,
+      clients_partial: results.filter((r: any) => r.status === 'partial').length,
+      clients_failed: results.filter((r: any) => r.status === 'failed').length,
+      facts_written: results.reduce((sum: number, r: any) => sum + Number(r.facts_written || 0), 0),
+    };
+    let status = counts.clients_failed === selected.length && selected.length ? 'failed' : counts.clients_failed || counts.clients_partial ? 'partial' : 'complete';
+    let runErrorCode = status === 'complete' ? null : 'CLIENT_SYNC_INCOMPLETE';
+    if (status === 'complete') {
+      const cutoff = new Date(Date.now() - 180 * 86400000).toISOString().slice(0, 10);
+      const { error: retentionError } = await db.from('meta_ads_facts').delete().eq('source', 'meta_graph').in('nivel', ['campaign', 'ad']).lt('data', cutoff);
+      if (retentionError) { status = 'partial'; runErrorCode = 'DATABASE_RETENTION'; }
+    }
+    const { error: finishError } = await db.from('meta_ads_sync_runs').update({ ...counts, status, finished_at: new Date().toISOString(), error_code: runErrorCode }).eq('id', runId);
+    if (finishError) throw new Error('DATABASE_RUN_FINISH');
+    return json({ ok: status === 'complete', status, run_id: runId, since: plan.pageSince, until: plan.pageUntil,
+      next_cursor: plan.nextCursor, ...counts, results }, status === 'complete' ? 200 : 207);
   } catch (error) {
-    return json({ ok: false, error: error?.message || 'Erro inesperado.' }, 500);
+    const code = safeErrorCode(error);
+    if (runId) await db.from('meta_ads_sync_runs').update({ status: 'failed', error_code: code, finished_at: new Date().toISOString() }).eq('id', runId);
+    return json({ ok: false, status: 'failed', run_id: runId, error_code: code }, code.startsWith('INVALID_') ? 400 : 500);
   }
 });
+
+type SyncPlan = { mode: string; since: string; until: string; pageSince: string; pageUntil: string; nextCursor: string | null; expectedDays: number };
+async function syncClient(db: any, token: string, runId: string, client: ClientRow, goal: GoalKey, plan: SyncPlan) {
+  const accountId = normalizeMetaAccount(client.meta_ads_act || '');
+  const base = { run_id: runId, cliente_id: client.id, meta_ads_act: accountId,
+    period_since: plan.pageSince, period_until: plan.pageUntil, expected_days: plan.expectedDays, missing_days: plan.expectedDays };
+  const { data: item, error: itemError } = await db.from('meta_ads_sync_items').insert(base).select('id').single();
+  if (itemError || !item) throw new Error('DATABASE_ITEM_INSERT');
+  const counts = { queried_days: 0, no_delivery_days: 0, missing_days: plan.expectedDays,
+    account_rows: 0, campaign_rows: 0, ad_rows: 0, facts_written: 0, health_status: 'not_checked' };
+  const failures: string[] = [];
+  let account: any = null;
+  try { account = await fetchMetaAccount(token, accountId); }
+  catch (error) { failures.push(`health:${safeErrorCode(error)}`); }
+  const currency = /^[A-Z]{3}$/.test(String(account?.currency || '')) ? account.currency : 'UNKNOWN';
+  const recentCutoff = new Date(Date.now() - 180 * 86400000).toISOString().slice(0, 10);
+  for (const level of ['account', 'campaign', 'ad'] as const) {
+    if (level !== 'account' && plan.pageUntil < recentCutoff) continue;
+    const levelSince = level === 'account' || plan.pageSince >= recentCutoff ? plan.pageSince : recentCutoff;
+    try {
+      const rows = await fetchMetaInsights(token, accountId, levelSince, plan.pageUntil, level);
+      const facts = rowsToFacts(rows, { clienteId: client.id, accountId, level, since: levelSince,
+        until: plan.pageUntil, currency, goal, syncedAt: new Date().toISOString() });
+      for (let offset = 0; offset < facts.length; offset += 100) {
+        const { error } = await db.from('meta_ads_facts').upsert(facts.slice(offset, offset + 100), { onConflict: 'cliente_id,meta_ads_act,nivel,entidade_id,data,moeda,atribuicao' });
+        if (error) throw new Error('DATABASE_FACT_WRITE');
+      }
+      counts.facts_written += facts.length;
+      if (level === 'account') counts.account_rows = rows.length;
+      if (level === 'campaign') counts.campaign_rows = rows.length;
+      if (level === 'ad') counts.ad_rows = rows.length;
+      if (level === 'account') {
+        counts.queried_days = plan.expectedDays;
+        counts.missing_days = 0;
+        counts.no_delivery_days = facts.filter((fact: any) => fact.entrega === 'no_delivery').length;
+      }
+    } catch (error) { failures.push(`${level}:${safeErrorCode(error)}`); }
+  }
+  if (account) {
+    try { await syncAccountHealth(db, token, client, accountId, account); counts.health_status = 'ok'; }
+    catch (error) { failures.push(`health:${safeErrorCode(error)}`); counts.health_status = 'failed'; }
+  } else counts.health_status = 'failed';
+  const status = counts.queried_days === 0 ? 'failed' : failures.length ? 'partial' : 'complete';
+  const { error: updateError } = await db.from('meta_ads_sync_items').update({ ...counts, status,
+    error_code: failures.length ? failures.join('|').slice(0, 180) : null, finished_at: new Date().toISOString() }).eq('id', item.id);
+  if (updateError) throw new Error('DATABASE_ITEM_FINISH');
+  return { cliente_id: client.id, status, error_code: failures.length ? failures.join('|').slice(0, 180) : null,
+    facts_written: counts.facts_written, queried_days: counts.queried_days, missing_days: counts.missing_days };
+}
 
 function json(data: unknown, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -152,84 +176,35 @@ function assertBackfillSecret(req: Request) {
   return difference === 0;
 }
 
-function resolveRange(payload: Record<string, any>) {
-  const mode = String(payload.mode || 'yesterday');
-  if (['backfill', 'range'].includes(mode)) {
-    const since = String(payload.since || '').slice(0, 10);
-    const until = String(payload.until || '').slice(0, 10);
-    if (!isIsoDate(since) || !isIsoDate(until)) throw new Error('Informe since e until no formato YYYY-MM-DD.');
-    if (since > until) throw new Error('since nao pode ser maior que until.');
-    return { since, until };
-  }
-
-  const now = new Date();
-  const saoPauloNow = new Date(now.toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
-  saoPauloNow.setDate(saoPauloNow.getDate() - 1);
-  const yesterday = isoDate(saoPauloNow);
-  return { since: yesterday, until: yesterday };
-}
-
-function isIsoDate(value: string) {
-  return /^\d{4}-\d{2}-\d{2}$/.test(value);
-}
-
-function isoDate(value: Date) {
-  const y = value.getFullYear();
-  const m = String(value.getMonth() + 1).padStart(2, '0');
-  const d = String(value.getDate()).padStart(2, '0');
-  return `${y}-${m}-${d}`;
-}
-
 function normalizeMetaAccount(value: string) {
   const clean = String(value || '').trim();
   if (!clean) throw new Error('Conta Meta Ads vazia.');
   return clean.startsWith('act_') ? clean : `act_${clean}`;
 }
 
-async function fetchMetaInsights(token: string, accountId: string, since: string, until: string) {
+async function fetchMetaInsights(token: string, accountId: string, since: string, until: string, level: 'account' | 'campaign' | 'ad') {
   const fields = [
-    'date_start',
-    'date_stop',
-    'impressions',
-    'reach',
-    'clicks',
-    'cpc',
-    'ctr',
-    'spend',
-    'actions',
-    'action_values',
+    'date_start', 'date_stop', 'impressions', 'reach', 'clicks', 'spend', 'actions', 'action_values',
+    ...(level === 'ad' ? ['ad_id', 'campaign_id'] : level === 'campaign' ? ['campaign_id'] : []),
   ].join(',');
-  const params = new URLSearchParams({
-    level: 'account',
-    fields,
-    time_range: JSON.stringify({ since, until }),
-    time_increment: '1',
-    limit: '100',
-    access_token: token,
-  });
-  const rows = [];
-  let next = `https://graph.facebook.com/${graphVersion}/${accountId}/insights?${params.toString()}`;
-  while (next) {
-    const response = await fetch(next);
-    const data = await response.json();
-    if (!response.ok || data.error) {
-      const err = data.error || {};
-      if (String(err.code) === '190') throw new Error('Token Meta Ads expirado ou invalido.');
-      throw new Error(err.message || `Erro Meta Ads ${response.status}`);
-    }
+  const params = new URLSearchParams({ level, fields, time_range: JSON.stringify({ since, until }),
+    time_increment: '1', limit: '100', use_unified_attribution_setting: 'true', access_token: token });
+  const rows: any[] = [];
+  let next = `https://graph.facebook.com/${graphVersion}/${accountId}/insights?${params}`;
+  for (let page = 0; next && page < 50; page++) {
+    const data = await fetchGraphJson(next);
     rows.push(...(data.data || []));
     next = data.paging?.next || '';
+    if (next && !next.startsWith('https://graph.facebook.com/')) throw new Error('META_PAGINATION');
   }
+  if (next) throw new Error('META_PAGINATION');
   return rows;
 }
 
-async function syncAccountHealth(supabase: any, token: string, client: ClientRow, accountId: string) {
-  const [account, campaignsResult, adsetsResult, adsResult] = await Promise.all([
-    fetchMetaAccount(token, accountId),
-    safeFetchMetaDeliveryObjects(token, accountId, 'campaigns'),
-    safeFetchMetaDeliveryObjects(token, accountId, 'adsets'),
-    safeFetchMetaDeliveryObjects(token, accountId, 'ads'),
-  ]);
+async function syncAccountHealth(supabase: any, token: string, client: ClientRow, accountId: string, account: any) {
+  const campaignsResult = await safeFetchMetaDeliveryObjects(token, accountId, 'campaigns');
+  const adsetsResult = await safeFetchMetaDeliveryObjects(token, accountId, 'adsets');
+  const adsResult = await safeFetchMetaDeliveryObjects(token, accountId, 'ads');
   const campaigns = campaignsResult.rows;
   const adsets = adsetsResult.rows;
   const ads = adsResult.rows;
@@ -258,26 +233,13 @@ async function syncAccountHealth(supabase: any, token: string, client: ClientRow
     effective_status: deliveryIssues.length ? 'WITH_ISSUES' : accountStatusLabel(account.account_status),
     has_delivery_issues: deliveryIssues.length > 0 || Number(account.account_status) === 3 || Number(account.disable_reason || 0) > 0,
     delivery_issues: deliveryIssues,
-    last_error: deliveryFetchErrors.length ? deliveryFetchErrors.join(' | ') : null,
-    raw: { account, deliverySample: deliveryIssues.slice(0, 20), deliveryFetchErrors },
+    last_error: deliveryFetchErrors.length ? 'DELIVERY_FETCH_INCOMPLETE' : null,
+    raw: { deliverySample: deliveryIssues.slice(0, 20) },
     checked_at: new Date().toISOString(),
   };
   const { error } = await supabase.from('meta_ads_account_health').upsert(payload, { onConflict: 'cliente_id' });
-  if (error) throw error;
-}
-
-async function saveAccountHealthError(supabase: any, client: ClientRow, accountId: string, message: string) {
-  const payload = {
-    cliente_id: client.id,
-    meta_ads_act: accountId,
-    account_id: accountId.replace(/^act_/, ''),
-    account_status_label: 'Erro',
-    effective_status: 'ERROR',
-    has_delivery_issues: true,
-    last_error: message,
-    checked_at: new Date().toISOString(),
-  };
-  await supabase.from('meta_ads_account_health').upsert(payload, { onConflict: 'cliente_id' });
+  if (error) throw new Error('DATABASE_HEALTH_WRITE');
+  if (deliveryFetchErrors.length) throw new Error('META_BAD_RESPONSE');
 }
 
 async function fetchMetaAccount(token: string, accountId: string) {
@@ -293,7 +255,7 @@ async function fetchMetaAccount(token: string, accountId: string) {
     'amount_spent',
     'spend_cap',
   ].join(',');
-  return fetchMetaJson(`https://graph.facebook.com/${graphVersion}/${accountId}?${new URLSearchParams({ fields, access_token: token }).toString()}`);
+  return fetchGraphJson(`https://graph.facebook.com/${graphVersion}/${accountId}?${new URLSearchParams({ fields, access_token: token }).toString()}`);
 }
 
 async function fetchMetaDeliveryObjects(token: string, accountId: string, edge: 'campaigns' | 'adsets' | 'ads') {
@@ -308,7 +270,7 @@ async function fetchMetaDeliveryObjects(token: string, accountId: string, edge: 
   let page = 0;
   while (next && page < 5) {
     page += 1;
-    const data = await fetchMetaJson(next);
+    const data = await fetchGraphJson(next);
     rows.push(...(data.data || []).map((item: any) => ({ ...item, level: edge })));
     next = data.paging?.next || '';
   }
@@ -321,92 +283,6 @@ async function safeFetchMetaDeliveryObjects(token: string, accountId: string, ed
   } catch (error) {
     return { rows: [], error: `${edge}: ${error?.message || 'falha ao consultar delivery'}` };
   }
-}
-
-async function fetchMetaJson(url: string) {
-  const response = await fetch(url);
-  const data = await response.json();
-  if (!response.ok || data.error) {
-    const err = data.error || {};
-    if (String(err.code) === '190') throw new Error('Token Meta Ads expirado ou invalido.');
-    throw new Error(err.message || `Erro Meta Ads ${response.status}`);
-  }
-  return data;
-}
-
-function summarizeDailyRows(rows: any[], client: ClientRow, goalKey: GoalKey) {
-  const byDay = new Map<string, any[]>();
-  rows.forEach((row) => {
-    const day = String(row.date_start || row.date_stop || '').slice(0, 10);
-    if (!day) return;
-    const current = byDay.get(day) || [];
-    current.push(row);
-    byDay.set(day, current);
-  });
-
-  return [...byDay.entries()].map(([day, dayRows]) => {
-    const totals = dayRows.reduce((acc, row) => {
-      acc.investimento += Number(row.spend || 0);
-      acc.impressoes += Number(row.impressions || 0);
-      acc.alcance += Number(row.reach || 0);
-      acc.cliques += Number(row.clicks || 0);
-      acc.mensagens += extractMetaAction(row, metaGoalConfig.mensagens.actionTypes);
-      acc.leads += extractMetaAction(row, metaGoalConfig.leads.actionTypes);
-      acc.vendas += extractMetaAction(row, metaGoalConfig.vendas.actionTypes);
-      acc.faturamento += extractMetaActionValue(row, metaGoalConfig.vendas.actionTypes);
-      return acc;
-    }, { investimento: 0, impressoes: 0, alcance: 0, cliques: 0, mensagens: 0, leads: 0, vendas: 0, faturamento: 0 });
-
-    return {
-      cliente_id: client.id,
-      meta_ads_act: normalizeMetaAccount(client.meta_ads_act || ''),
-      data: day,
-      objetivo: goalKey,
-      investimento: roundMoney(totals.investimento),
-      impressoes: Math.round(totals.impressoes),
-      alcance: Math.round(totals.alcance),
-      cliques: Math.round(totals.cliques),
-      ctr: ratio(totals.cliques * 100, totals.impressoes, 4),
-      cpc: ratio(totals.investimento, totals.cliques, 4),
-      mensagens: Math.round(totals.mensagens),
-      custo_por_mensagem: ratio(totals.investimento, totals.mensagens, 4),
-      leads: Math.round(totals.leads),
-      custo_por_lead: ratio(totals.investimento, totals.leads, 4),
-      vendas: Math.round(totals.vendas),
-      custo_por_venda: ratio(totals.investimento, totals.vendas, 4),
-      faturamento: roundMoney(totals.faturamento),
-      roas: ratio(totals.faturamento, totals.investimento, 4),
-      raw: { source: 'meta_ads_insights', rows: dayRows.length },
-      synced_at: new Date().toISOString(),
-    };
-  });
-}
-
-function extractMetaAction(row: any, actionTypes: readonly string[]) {
-  const actions = row.actions || [];
-  for (const actionType of actionTypes) {
-    const found = actions.find((item: any) => item.action_type === actionType);
-    if (found) return Number(found.value || 0);
-  }
-  return 0;
-}
-
-function extractMetaActionValue(row: any, actionTypes: readonly string[]) {
-  const values = row.action_values || [];
-  for (const actionType of actionTypes) {
-    const found = values.find((item: any) => item.action_type === actionType);
-    if (found) return Number(found.value || 0);
-  }
-  return 0;
-}
-
-function ratio(part: number, total: number, decimals = 2) {
-  const denominator = Number(total || 0);
-  return denominator ? Number((Number(part || 0) / denominator).toFixed(decimals)) : 0;
-}
-
-function roundMoney(value: number) {
-  return Number(Number(value || 0).toFixed(2));
 }
 
 function toNullableNumber(value: unknown) {

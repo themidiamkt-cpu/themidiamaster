@@ -10,7 +10,7 @@ const days = (since, until) => {
   return out;
 };
 const later = (a, b) => String(a?.synced_at || a?.updated_at || a?.created_at || '').localeCompare(String(b?.synced_at || b?.updated_at || b?.created_at || ''));
-const metric = (amount, source, coverage, extra = {}) => ({ value: amount, source, channel: 'meta_ads', period: coverage.period, timezone: METRIC_CONTEXT.timezone, currency: METRIC_CONTEXT.currency, attributionWindow: extra.attributionWindow ?? 'configuracao_meta_nao_registrada', updatedAt: extra.updatedAt || null, coverage: { observedDays: coverage.observedDays, estimatedDays: coverage.estimatedDays, missingDays: coverage.missingDays, totalDays: coverage.totalDays }, status: amount == null ? 'missing' : coverage.estimatedDays ? 'estimated' : coverage.missingDays ? 'partial' : 'measured' });
+const metric = (amount, source, coverage, extra = {}) => ({ value: amount, source, channel: 'meta_ads', period: coverage.period, timezone: METRIC_CONTEXT.timezone, currency: METRIC_CONTEXT.currency, attributionWindow: extra.attributionWindow ?? 'configuracao_meta_nao_registrada', updatedAt: extra.updatedAt || null, coverage: { observedDays: coverage.observedDays, estimatedDays: coverage.estimatedDays, missingDays: coverage.missingDays, noDeliveryDays: coverage.noDeliveryDays, totalDays: coverage.totalDays }, status: amount == null ? 'missing' : coverage.estimatedDays ? 'estimated' : coverage.missingDays ? 'partial' : 'measured' });
 
 export function aggregateClientMetrics({ range, daily = [], reports = [], sales = [], origin = 'all', goal = 'mensagens' }) {
   const periodDays = days(range.since, range.until);
@@ -18,7 +18,8 @@ export function aggregateClientMetrics({ range, daily = [], reports = [], sales 
   for (const row of daily) {
     if (!periodDays.includes(row.data)) continue;
     const old = byDay.get(row.data);
-    if (!old || Number(row.objetivo === goal) > Number(old.objetivo === goal) || (row.objetivo === old.objetivo && later(row, old) > 0)) byDay.set(row.data, row);
+    const rank = (item) => item.source === 'meta_graph' ? 2 : item.source === 'legacy' ? 1 : 0;
+    if (!old || rank(row) > rank(old) || (rank(row) === rank(old) && later(row, old) > 0)) byDay.set(row.data, row);
   }
   const reportForDay = new Map();
   for (const day of periodDays) {
@@ -27,7 +28,7 @@ export function aggregateClientMetrics({ range, daily = [], reports = [], sales 
     candidates.sort((a, b) => later(b, a) || String(b.id || '').localeCompare(String(a.id || '')));
     if (candidates.length) reportForDay.set(day, candidates[0]);
   }
-  const coverage = { period: range, observedDays: byDay.size, estimatedDays: reportForDay.size, missingDays: periodDays.length - byDay.size - reportForDay.size, totalDays: periodDays.length };
+  const coverage = { period: range, observedDays: byDay.size, noDeliveryDays: [...byDay.values()].filter((row) => row.entrega === 'no_delivery').length, estimatedDays: reportForDay.size, missingDays: periodDays.length - byDay.size - reportForDay.size, totalDays: periodDays.length };
   const updatedAt = [...byDay.values()].map((r) => r.synced_at).filter(Boolean).sort().at(-1) || null;
   const fields = {};
   for (const [name, dailyField] of Object.entries(FIELDS)) {
