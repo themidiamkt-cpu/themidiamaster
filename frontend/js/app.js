@@ -1,4 +1,5 @@
 import { aggregateClientMetrics, deriveReportMetrics, summarizeMetaRows as summarizeMetaRowsCore } from './metrics.js';
+import { compareIntervention, interventionRanges } from './attentionComparison.js';
 import { ensureSession, isSupabaseConfigured, supabase } from './supabase.js';
 import { clienteService } from './services/clienteService.js';
 import { leadCrmService } from './services/leadCrmService.js';
@@ -12,8 +13,11 @@ import { equipeService } from './services/equipeService.js';
 import { equipeClienteService } from './services/equipeClienteService.js';
 import { diarioBordoService } from './services/diarioBordoService.js';
 import { alertaAnomaliaService } from './services/alertaAnomaliaService.js';
+import { attentionService } from './services/attentionService.js';
+import { bindCreativeIntelligence, renderCreativeIntelligence } from './creative/view.js';
 import { metaClienteService } from './services/metaClienteService.js';
 import { vendaClienteService } from './services/vendaClienteService.js';
+import { assinaturaService } from './services/assinaturaService.js';
 import { metaAdsDailyInsightService } from './services/metaAdsDailyInsightService.js';
 import { metaAdsAccountHealthService } from './services/metaAdsAccountHealthService.js';
 import { metaAdsSyncItemService } from './services/metaAdsSyncItemService.js';
@@ -30,8 +34,8 @@ const initialMetaDateRange = getDefaultDateRange();
 const whatsappWebhookUrl = 'https://automacao2.themidiamarketing.com.br/webhook/conectar-cliente';
 const mainAdminEmail = 'themidiamkt@gmail.com';
 const viewStorageKey = 'theMidiaMaster.activeView';
-const adminViews = ['dashboard', 'dashboardClientes', 'clientes', 'relatorios', 'crm', 'crmFollowups', 'metaAds', 'googleAds', 'gbp', 'diario', 'tarefas', 'playbooks', 'equipe', 'metas', 'alertas', 'config'];
-const trafficManagerViews = ['dashboardClientes', 'clientes', 'metaAds', 'googleAds', 'gbp', 'diario', 'tarefas', 'playbooks', 'metas', 'alertas'];
+const adminViews = ['dashboard', 'dashboardClientes', 'clientes', 'relatorios', 'gastos', 'metaAds', 'googleAds', 'tarefas', 'playbooks', 'creativeIntelligence', 'equipe', 'metas', 'config'];
+const trafficManagerViews = ['dashboardClientes', 'clientes', 'metaAds', 'googleAds', 'tarefas', 'playbooks', 'metas'];
 const teamViews = trafficManagerViews;
 
 const state = {
@@ -50,6 +54,8 @@ const state = {
   relatorios: [],
   vendas: [],
   vendasMissingTable: false,
+  assinaturas: [],
+  assinaturasMissingTable: false,
   metaAdsDailyInsights: [],
   metaAdsDailyInsightsMissingTable: false,
   metaAdsAccountHealth: [],
@@ -68,6 +74,7 @@ const state = {
   metas: [],
   metaRowDrafts: {},
   alertas: [],
+  alertInterventions: [],
   alertasMissingTable: false,
   alertasFiltroStatus: 'ativo',
   alertasFiltroSeveridade: 'all',
@@ -204,7 +211,6 @@ async function init() {
   if (initialized) return;
   initialized = true;
   await loadAll();
-  setupCrmRealtime();
   render();
 }
 
@@ -240,47 +246,37 @@ async function loadAll() {
 
     if (isMainAdmin()) {
       const dashboardRange = getFourWeeksRange();
-      const [clientes, leads, crmWebhookLogs, campanhas, relatorios, vendas, metaAdsDailyInsights, metaAdsAccountHealth, metaAdsSyncItems, gmnAnalises, tarefas, diarios, equipe, equipeClientes, alertas, metas] = await withTimeout(Promise.all([
+      const [clientes, campanhas, relatorios, vendas, assinaturas, metaAdsDailyInsights, metaAdsAccountHealth, metaAdsSyncItems, tarefas, equipe, equipeClientes, metas] = await withTimeout(Promise.all([
         clienteService.list({ order: 'nome_empresa', ascending: true }),
-        leadCrmService.list(),
-        safeCrmWebhookLogsList(),
         campanhaService.list({ columns: '*, clientes(nome_empresa, meta_ads_act)' }),
         relatorioService.list({ columns: '*, clientes(nome_empresa, meta_ads_act)' }),
         safeVendasList(),
+        safeAssinaturasList(),
         safeMetaAdsDailyInsightsList(dashboardRange.since),
         safeMetaAdsAccountHealthList(),
         safeMetaAdsSyncItemsList(),
-        safeGmnAnalisesList(),
         tarefaService.list({ columns: '*, clientes(nome_empresa)' }),
-        safeDiaryList(),
         equipeService.list({ order: 'nome', ascending: true }),
         safeEquipeClientesList(),
-        safeAlertasList(),
         safeList(() => metaClienteService.listAll()),
       ]), 12000, 'O Supabase demorou para carregar os dados. Mostrando o painel em modo vazio ate atualizar.');
-      Object.assign(state, { clientes, leads, crmWebhookLogs, campanhas, relatorios, vendas, metaAdsDailyInsights, metaAdsAccountHealth, metaAdsSyncItems, gmnAnalises, tarefas, diarios, equipe, equipeClientes, alertas, metas });
-      updateAlertasBadge();
-      setupCrmRealtime();
+      Object.assign(state, { clientes, campanhas, relatorios, vendas, assinaturas, metaAdsDailyInsights, metaAdsAccountHealth, metaAdsSyncItems, tarefas, equipe, equipeClientes, metas, leads: [], crmWebhookLogs: [], gmnAnalises: [], diarios: [], alertas: [], alertInterventions: [] });
       return;
     }
 
     const dashboardRange = getFourWeeksRange();
-    const [clientes, relatorios, vendas, metaAdsDailyInsights, metaAdsAccountHealth, metaAdsSyncItems, gmnAnalises, tarefas, diarios, alertas, metas] = await withTimeout(Promise.all([
+    const [clientes, relatorios, vendas, metaAdsDailyInsights, metaAdsAccountHealth, metaAdsSyncItems, tarefas, metas] = await withTimeout(Promise.all([
       clienteService.list({ order: 'nome_empresa', ascending: true }),
       relatorioService.list({ columns: '*, clientes(nome_empresa, meta_ads_act)' }),
       safeVendasList(),
       safeMetaAdsDailyInsightsList(dashboardRange.since),
       safeMetaAdsAccountHealthList(),
       safeMetaAdsSyncItemsList(),
-      safeGmnAnalisesList(),
       tarefaService.list({ columns: '*, clientes(nome_empresa)' }),
-      safeDiaryList(),
-      safeAlertasList(),
       safeList(() => metaClienteService.listAll()),
     ]), 12000, 'O Supabase demorou para carregar os dados. Mostrando o painel em modo vazio ate atualizar.');
-    const scoped = scopeDataToVisibleClients({ clientes, relatorios, vendas, metaAdsDailyInsights, metaAdsAccountHealth, metaAdsSyncItems, gmnAnalises, tarefas, diarios, alertas, metas });
+    const scoped = scopeDataToVisibleClients({ clientes, relatorios, vendas, metaAdsDailyInsights, metaAdsAccountHealth, metaAdsSyncItems, tarefas, metas });
     Object.assign(state, { ...scoped, leads: [], crmWebhookLogs: [], campanhas: [], equipe: [], equipeClientes: [] });
-    updateAlertasBadge();
     teardownCrmRealtime();
   } catch (error) {
     state.loadError = error.message || 'Nao foi possivel carregar os dados do Supabase.';
@@ -295,6 +291,31 @@ async function safeList(loader) {
     if (['42P01', 'PGRST205'].includes(error.code)) return [];
     throw error;
   }
+}
+
+async function safeAssinaturasList() {
+  try {
+    const rows = await assinaturaService.list({ order: 'proximo_vencimento', ascending: true });
+    state.assinaturasMissingTable = false;
+    return rows;
+  } catch (error) {
+    if (['42P01', 'PGRST205'].includes(error?.code) || String(error?.message || '').includes('assinaturas')) {
+      state.assinaturasMissingTable = true;
+      return [];
+    }
+    throw error;
+  }
+}
+
+async function expandAttentionFactHistory(currentSince) {
+  const cutoff = isoDate(new Date(Date.now() - 90 * 86400000));
+  const earlier = state.alertInterventions.map((item) => item.periodo_antes_inicio).filter((day) => day && day < currentSince && day >= cutoff).sort()[0];
+  if (!earlier || state.metaAdsDailyInsightsMissingTable) return;
+  try {
+    const rows = await metaAdsDailyInsightService.listRecent(earlier);
+    const visible = new Set(state.clientes.map((client) => client.id));
+    state.metaAdsDailyInsights = rows.filter((row) => visible.has(row.cliente_id));
+  } catch { /* Comparison remains unavailable when history cannot be loaded. */ }
 }
 
 async function safeEquipeClientesList() {
@@ -320,6 +341,7 @@ function scopeDataToVisibleClients(data) {
     tarefas: (data.tarefas || []).filter(byClient),
     diarios: (data.diarios || []).filter(byClient),
     alertas: (data.alertas || []).filter((row) => !row?.cliente_id || visibleClientIds.has(row.cliente_id)),
+    alertInterventions: (data.alertInterventions || []).filter(byClient),
     metas: (data.metas || []).filter(byClient),
   };
 }
@@ -691,23 +713,21 @@ function render() {
     dashboard: renderDashboard,
     dashboardClientes: renderDashboardClientes,
     clientes: renderClientes,
-    crm: renderCrm,
-    crmFollowups: renderCrmFollowups,
+    gastos: renderGastos,
     campanhas: renderCampanhas,
     relatorios: renderRelatorios,
     metaAds: renderMetaAds,
     googleAds: renderGoogleAdsPage,
-    gbp: renderGbp,
-    diario: renderDiario,
     tarefas: renderTarefas,
     playbooks: renderPlaybooks,
+    creativeIntelligence: renderCreativeIntelligence,
     equipe: renderEquipe,
     metas: renderMetas,
-    alertas: renderAlertas,
     config: renderConfig,
   };
   app.innerHTML = `${renderLoadErrorBanner()}${views[state.view]?.() || renderDashboard()}`;
   bindGlobalActions();
+  if (state.view === 'creativeIntelligence') bindCreativeIntelligence({ rerender: render, getClientes: () => state.clientes });
   renderLucide();
 }
 
@@ -974,6 +994,36 @@ function blobToDataUrl(blob) {
 }
 
 function renderDashboard() {
+  {
+    const activeClients = state.clientes.filter((cliente) => cliente.status === 'ativo');
+    const monthlyRevenue = activeClients.reduce((sum, cliente) => sum + Number(cliente.valor_mensal || 0), 0);
+    const activeSubscriptions = state.assinaturas.filter((item) => item.status === 'ativa');
+    const monthlyExpenses = activeSubscriptions.reduce((sum, item) => sum + monthlyEquivalent(item), 0);
+    const paidThisMonth = activeSubscriptions.filter(isPaidThisMonth).reduce((sum, item) => sum + Number(item.valor || 0), 0);
+    const pendingThisMonth = activeSubscriptions.filter((item) => isDueThisMonth(item) && !isPaidThisMonth(item)).reduce((sum, item) => sum + Number(item.valor || 0), 0);
+    return `
+      ${pageHeader('Dashboard geral da agencia', 'Visao objetiva de clientes, receita contratada e custos recorrentes.', `<button class="button" data-action="refresh"><i data-lucide="refresh-cw"></i>Atualizar</button>`)}
+      <section class="dashboard-area">
+        <div class="dashboard-area-header"><div><span>Carteira</span><h2>Clientes</h2></div><p>${activeClients.length} ativos de ${state.clientes.length} cadastrados</p></div>
+        <div class="stats-grid compact">
+          ${statCard('Clientes ativos', activeClients.length, 'building-2', 'green')}
+          ${statCard('Receita mensal contratada', money(monthlyRevenue), 'wallet', 'gold')}
+          ${statCard('Relatorios lancados', state.relatorios.length, 'file-bar-chart', 'blue')}
+          ${statCard('Tarefas pendentes', getPendingTasks().length, 'list-checks', 'yellow')}
+        </div>
+      </section>
+      <section class="dashboard-area dashboard-area-featured">
+        <div class="dashboard-area-header"><div><span>Previsibilidade</span><h2>Gastos e assinaturas</h2></div><p>${activeSubscriptions.length} assinatura(s) ativa(s)</p></div>
+        <div class="stats-grid compact">
+          ${statCard('Custo mensal previsto', money(monthlyExpenses), 'receipt-text', 'red')}
+          ${statCard('Pago neste mes', money(paidThisMonth), 'badge-check', 'green')}
+          ${statCard('Pendente neste mes', money(pendingThisMonth), 'calendar-clock', 'yellow')}
+          ${statCard('Margem contratada prevista', money(monthlyRevenue - monthlyExpenses), 'chart-no-axes-combined', 'blue')}
+        </div>
+        <div style="margin-top:16px"><button class="button" data-action="go-view" data-view="gastos"><i data-lucide="arrow-right"></i>Gerenciar gastos</button></div>
+      </section>
+    `;
+  }
   const active = state.clientes.filter((c) => c.status === 'ativo');
   const paused = state.clientes.filter((c) => c.status === 'pausado');
   const canceled = state.clientes.filter((c) => c.status === 'cancelado');
@@ -1098,6 +1148,86 @@ function renderDashboard() {
       </div>
     </section>
   `;
+}
+
+function renderGastos() {
+  if (state.assinaturasMissingTable) {
+    return `${pageHeader('Gastos e Assinaturas', 'Controle de custos recorrentes e pagamentos.', '')}${emptyState('Area pronta para ativar', 'Aplique a migration de assinaturas no Supabase para comecar a cadastrar os gastos.')}`;
+  }
+  const active = state.assinaturas.filter((item) => item.status === 'ativa');
+  const monthly = active.reduce((sum, item) => sum + monthlyEquivalent(item), 0);
+  const annual = monthly * 12;
+  const paid = active.filter(isPaidThisMonth).reduce((sum, item) => sum + Number(item.valor || 0), 0);
+  const pending = active.filter((item) => isDueThisMonth(item) && !isPaidThisMonth(item)).reduce((sum, item) => sum + Number(item.valor || 0), 0);
+  const rows = [...state.assinaturas].sort((a, b) => String(a.proximo_vencimento).localeCompare(String(b.proximo_vencimento)));
+  return `
+    ${pageHeader('Gastos e Assinaturas', 'Cadastre ChatGPT e outros custos, marque pagamentos e antecipe os proximos vencimentos.', `<button class="button" data-action="new" data-entity="assinaturas"><i data-lucide="plus"></i>Novo gasto</button>`)}
+    <div class="stats-grid compact">
+      ${statCard('Previsao mensal', money(monthly), 'calendar-range', 'blue')}
+      ${statCard('Previsao anual', money(annual), 'chart-column-big', 'gold')}
+      ${statCard('Pago neste mes', money(paid), 'badge-check', 'green')}
+      ${statCard('Pendente neste mes', money(pending), 'clock-3', 'red')}
+    </div>
+    <div class="panel" style="margin-top:20px">
+      <div class="panel-header"><div><h3>Assinaturas e gastos</h3><p class="muted">Valores anuais, semestrais e trimestrais sao convertidos para a previsao mensal.</p></div></div>
+      ${rows.length ? `<div class="table-wrap"><table><thead><tr><th>Assinatura</th><th>Categoria</th><th>Recorrencia</th><th>Valor</th><th>Proximo vencimento</th><th>Pagamento</th><th>Status</th><th></th></tr></thead><tbody>${rows.map((item) => `
+        <tr>
+          <td><strong>${escapeHtml(item.nome)}</strong>${item.fornecedor ? `<span class="muted" style="display:block">${escapeHtml(item.fornecedor)}</span>` : ''}</td>
+          <td>${escapeHtml(label(item.categoria))}</td>
+          <td>${escapeHtml(label(item.recorrencia))}</td>
+          <td><strong>${money(item.valor)}</strong><span class="muted" style="display:block">${money(monthlyEquivalent(item))}/mes</span></td>
+          <td>${date(item.proximo_vencimento)}</td>
+          <td>${isPaidThisMonth(item) ? statusBadge('pago') : statusBadge(isDueThisMonth(item) ? 'pendente' : 'previsto')}</td>
+          <td>${statusBadge(item.status)}</td>
+          <td><div class="actions">${item.status === 'ativa' && !isPaidThisMonth(item) ? `<button class="secondary-button" data-action="mark-subscription-paid" data-id="${item.id}"><i data-lucide="check"></i>Marcar pago</button>` : ''}${actionButtons('assinaturas', item.id)}</div></td>
+        </tr>`).join('')}</tbody></table></div>` : emptyState('Nenhum gasto cadastrado', 'Adicione sua primeira assinatura, como ChatGPT, hospedagem ou ferramenta de design.')}
+    </div>
+  `;
+}
+
+function monthlyEquivalent(item) {
+  const divisors = { mensal: 1, trimestral: 3, semestral: 6, anual: 12, unica: 1 };
+  if (item.status !== 'ativa' || item.recorrencia === 'unica') return item.status === 'ativa' && isDueThisMonth(item) ? Number(item.valor || 0) : 0;
+  return Number(item.valor || 0) / (divisors[item.recorrencia] || 1);
+}
+
+function isPaidThisMonth(item) {
+  if (!item.ultimo_pagamento_em) return false;
+  const paid = new Date(item.ultimo_pagamento_em);
+  const now = new Date();
+  return paid.getFullYear() === now.getFullYear() && paid.getMonth() === now.getMonth();
+}
+
+function isDueThisMonth(item) {
+  if (!item.proximo_vencimento) return false;
+  const due = new Date(`${item.proximo_vencimento}T12:00:00`);
+  const now = new Date();
+  return due.getFullYear() === now.getFullYear() && due.getMonth() === now.getMonth();
+}
+
+function nextSubscriptionDue(item) {
+  if (item.recorrencia === 'unica') return item.proximo_vencimento;
+  const months = { mensal: 1, trimestral: 3, semestral: 6, anual: 12 }[item.recorrencia] || 1;
+  const due = new Date(`${item.proximo_vencimento}T12:00:00`);
+  due.setMonth(due.getMonth() + months);
+  return isoDate(due);
+}
+
+async function markSubscriptionPaid(id) {
+  const item = state.assinaturas.find((row) => row.id === id);
+  if (!item) return;
+  try {
+    await assinaturaService.update(id, {
+      ultimo_pagamento_em: new Date().toISOString(),
+      proximo_vencimento: nextSubscriptionDue(item),
+      status: item.recorrencia === 'unica' ? 'cancelada' : item.status,
+    });
+    await loadAll();
+    render();
+    toast('Pagamento registrado. Proximo vencimento atualizado.');
+  } catch (error) {
+    showError(error);
+  }
 }
 
 function operationCardAttrs(kind) {
@@ -4089,6 +4219,9 @@ function renderMetas() {
       placeholder="—" value="${val != null && val !== '' ? Number(val) : ''}"
       data-action="meta-cell-edit" data-id="${id}" data-field="${field}">`;
 
+  const dateCell = (id, field, val) => `<input class="meta-cell-input" type="date" value="${escapeHtml(val || '')}" data-action="meta-cell-edit" data-id="${id}" data-field="${field}">`;
+  const channelCell = (id, val) => `<select class="meta-cell-input" data-action="meta-cell-edit" data-id="${id}" data-field="canal"><option value="meta_ads" ${val !== 'google_ads' ? 'selected' : ''}>Meta Ads</option><option value="google_ads" ${val === 'google_ads' ? 'selected' : ''}>Google Ads</option></select>`;
+
   // Linha nova (rascunho por cliente)
   const newObjSel = (clienteId) => {
     const draft = state.metaRowDrafts[clienteId] || {};
@@ -4107,6 +4240,9 @@ function renderMetas() {
       data-action="meta-new-field" data-cliente="${clienteId}" data-field="${field}">`;
   };
 
+  const newDate = (clienteId, field) => `<input class="meta-cell-input" type="date" value="${escapeHtml(state.metaRowDrafts[clienteId]?.[field] || '')}" data-action="meta-new-field" data-cliente="${clienteId}" data-field="${field}">`;
+  const newChannel = (clienteId) => `<select class="meta-cell-input" data-action="meta-new-field" data-cliente="${clienteId}" data-field="canal"><option value="meta_ads">Meta Ads</option><option value="google_ads">Google Ads</option></select>`;
+
   const rows = activeClientes.map((cliente) => {
     const metas = metasByCliente[cliente.id] || [];
     const hasMeta = metas.length > 0;
@@ -4119,6 +4255,14 @@ function renderMetas() {
           <span class="muted">${escapeHtml(cliente.meta_ads_act || '')}</span>
         </td>
         <td>${objSel(m.objetivo, m.id, 'objetivo')}</td>
+        <td>${channelCell(m.id, m.canal)}</td>
+        <td>${dateCell(m.id, 'periodo_inicio', m.periodo_inicio)}</td>
+        <td>${dateCell(m.id, 'periodo_fim', m.periodo_fim)}</td>
+        <td>${numCell(m.id, 'meta_volume', m.meta_volume)}</td>
+        <td>${numCell(m.id, 'orcamento_periodo', m.orcamento_periodo)}</td>
+        <td>${numCell(m.id, 'meta_custo_qualificado', m.meta_custo_qualificado)}</td>
+        <td>${numCell(m.id, 'meta_custo_venda', m.meta_custo_venda)}</td>
+        <td>${numCell(m.id, 'margem_contribuicao_pct', m.margem_contribuicao_pct)}</td>
         <td>${numCell(m.id, 'meta_custo_resultado', m.meta_custo_resultado)}</td>
         <td>${numCell(m.id, 'meta_roas_minimo', m.meta_roas_minimo)}</td>
         <td>${numCell(m.id, 'meta_ctr_minimo', m.meta_ctr_minimo)}</td>
@@ -4136,6 +4280,14 @@ function renderMetas() {
       <tr class="meta-row meta-new-row" data-new-cliente="${cliente.id}">
         ${!hasMeta ? `<td class="meta-cliente-name"><strong>${escapeHtml(cliente.nome_empresa)}</strong><span class="muted">${escapeHtml(cliente.meta_ads_act || '')}</span></td>` : '<td></td>'}
         <td>${newObjSel(cliente.id)}</td>
+        <td>${newChannel(cliente.id)}</td>
+        <td>${newDate(cliente.id, 'periodo_inicio')}</td>
+        <td>${newDate(cliente.id, 'periodo_fim')}</td>
+        <td>${newNum(cliente.id, 'meta_volume')}</td>
+        <td>${newNum(cliente.id, 'orcamento_periodo')}</td>
+        <td>${newNum(cliente.id, 'meta_custo_qualificado')}</td>
+        <td>${newNum(cliente.id, 'meta_custo_venda')}</td>
+        <td>${newNum(cliente.id, 'margem_contribuicao_pct')}</td>
         <td>${newNum(cliente.id, 'meta_custo_resultado')}</td>
         <td>${newNum(cliente.id, 'meta_roas_minimo')}</td>
         <td>${newNum(cliente.id, 'meta_ctr_minimo')}</td>
@@ -4150,17 +4302,18 @@ function renderMetas() {
   }).join('');
 
   return `
-    ${pageHeader('Metas de Performance', 'Preencha direto na tabela — salva automaticamente. O alerta de anomalias usa esses valores todo dia às 9h.', '')}
-    <section class="panel" style="padding:0;overflow:hidden">
+    ${pageHeader('Metas de Performance', 'Metas por cliente, canal, objetivo e período. Rentabilidade exige margem e receita conciliada; sem ROAS universal.', '')}
+    <section class="panel" style="padding:0;overflow:auto">
       <table class="table meta-inline-table">
         <thead><tr>
           <th>Cliente</th>
           <th>Objetivo</th>
-          <th title="Custo máximo por resultado">Custo/resultado (R$)</th>
-          <th title="ROAS mínimo aceitável">ROAS mín.</th>
+          <th>Canal</th><th>Início</th><th>Fim</th><th>Volume</th><th>Orçamento período</th><th>Custo qualificado</th><th>Custo venda</th><th>Margem (%)</th>
+          <th title="Custo por conversão medido na Meta; separado do custo por venda operacional">Custo/conversão Meta (R$)</th>
+          <th title="Campo legado: não usado pela central sem margem e receita conciliada">ROAS mín. legado</th>
           <th title="CTR mínimo em %">CTR mín. (%)</th>
-          <th title="Limite de gasto diário">Verba diária máx. (R$)</th>
-          <th title="% variação vs 7 dias para alerta">Alerta variação (%)</th>
+          <th title="Campo legado do workflow externo">Verba diária máx. legado (R$)</th>
+          <th title="Campo legado do workflow externo">Variação legado (%)</th>
           <th></th>
         </tr></thead>
         <tbody>${rows}</tbody>
@@ -4186,13 +4339,21 @@ function renderAlertas() {
 
   const statusFiltro = state.alertasFiltroStatus || 'ativo';
   const sevFiltro    = state.alertasFiltroSeveridade || 'all';
-  const alertasComPiora = state.alertas.filter((alerta) => !isImprovingAlert(alerta));
+  const alertasComPiora = state.alertas.filter((alerta) => alerta.rule_key || !isImprovingAlert(alerta));
 
   let lista = alertasComPiora.filter((a) => {
     if (statusFiltro !== 'all' && a.status !== statusFiltro) return false;
     if (sevFiltro !== 'all' && a.severidade !== sevFiltro) return false;
     return true;
   });
+  const priority = { critica: 3, alta: 2, media: 1 };
+  const confidence = { alta: 3, media: 2, baixa: 1 };
+  lista.sort((a, b) => (priority[b.severidade] || 0) - (priority[a.severidade] || 0)
+    || Number(b.impacto_estimado || 0) - Number(a.impacto_estimado || 0)
+    || (confidence[b.confianca] || 0) - (confidence[a.confianca] || 0)
+    || String(b.created_at).localeCompare(String(a.created_at)));
+  const attentionCards = lista.filter((a) => a.rule_key || a.metrica === 'diario');
+  lista = lista.filter((a) => !a.rule_key && a.metrica !== 'diario');
 
   const totalAtivos   = alertasComPiora.filter((a) => a.status === 'ativo').length;
   const totalCriticos = alertasComPiora.filter((a) => a.status === 'ativo' && a.severidade === 'critica').length;
@@ -4201,7 +4362,9 @@ function renderAlertas() {
   const headerActions = `<button class="secondary-button" data-action="run-verificacao"><i data-lucide="play"></i>Fazer verificacao</button><button class="button" data-action="refresh"><i data-lucide="refresh-cw"></i>Atualizar</button>`;
 
   return `
-    ${pageHeader('Alertas de Anomalias', 'Deteccao automatica diaria via n8n — CPL, CTR, ROAS e verba por cliente.', headerActions)}
+    ${pageHeader('Central de Atenção', 'Evidências medidas, hipóteses e próximos passos. A verificação não altera campanhas nem orçamentos.', headerActions)}
+    <p class="muted">Dados e entrega de mídia usam fatos Meta medidos. Atendimento, lead qualificado, vendas operacionais e rentabilidade aguardam dados comerciais por cliente e margem conciliada; conversão Meta não é venda confirmada.</p>
+    <p class="muted">Ordem: gravidade, impacto estimado quando disponível, confiança e data. Impacto é hipótese, não receita realizada.</p>
     <div class="stat-grid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:1.5rem;">
       <div class="stat-card"><span>Alertas ativos</span><strong style="font-size:28px;color:var(--color-danger,#dc2626)">${totalAtivos}</strong></div>
       <div class="stat-card"><span>Criticos</span><strong style="font-size:28px;color:var(--color-danger,#dc2626)">${totalCriticos}</strong></div>
@@ -4210,12 +4373,14 @@ function renderAlertas() {
 
     <section class="panel" style="margin-bottom:1rem;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
       <span style="font-size:13px;color:var(--muted)">Status:</span>
-      ${['ativo', 'resolvido', 'ignorado', 'all'].map((s) => `<button class="secondary-button ${statusFiltro === s ? 'active' : ''}" data-action="alerta-filtro-status" data-val="${s}" style="padding:4px 12px;font-size:12px">${s === 'all' ? 'Todos' : label(s)}</button>`).join('')}
+      ${['ativo', 'reconhecido', 'adiado', 'resolvido', 'ignorado', 'all'].map((s) => `<button class="secondary-button ${statusFiltro === s ? 'active' : ''}" data-action="alerta-filtro-status" data-val="${s}" style="padding:4px 12px;font-size:12px">${s === 'all' ? 'Todos' : label(s)}</button>`).join('')}
       <span style="font-size:13px;color:var(--muted);margin-left:12px">Severidade:</span>
       ${['all', 'critica', 'alta', 'media'].map((s) => `<button class="secondary-button ${sevFiltro === s ? 'active' : ''}" data-action="alerta-filtro-sev" data-val="${s}" style="padding:4px 12px;font-size:12px">${s === 'all' ? 'Todas' : label(s)}</button>`).join('')}
     </section>
 
-    ${lista.length === 0 ? emptyState('Sem alertas', statusFiltro === 'ativo' ? 'Nenhuma anomalia detectada com os filtros selecionados.' : 'Nenhum alerta neste filtro.') : `
+    ${attentionCards.map((alert) => renderAttentionCard(alert)).join('')}
+    ${lista.length === 0 && attentionCards.length === 0 ? emptyState('Sem alertas', statusFiltro === 'ativo' ? 'Nenhuma ocorrência com os filtros selecionados. Execute a verificação autenticada após a migration.' : 'Nenhum alerta neste filtro.') : ''}
+    ${lista.length ? `
     <section class="panel" style="padding:0;overflow:hidden">
       <table class="table">
         <thead><tr>
@@ -4280,8 +4445,69 @@ function renderAlertas() {
           }).join('')}
         </tbody>
       </table>
-    </section>`}
+    </section>` : ''}
   `;
+}
+
+function renderAttentionCard(alert) {
+  const evidence = alert.evidencia || {};
+  const keys = {
+    observedDays: 'Dias medidos', expectedDays: 'Dias esperados', missingDays: 'Dias ausentes', coveragePct: 'Cobertura (%)',
+    actualSpend: 'Gasto medido', plannedThrough: 'Planejado até a data', plannedRemaining: 'Planejado restante',
+    revisedBudget: 'Orçamento vigente por calendário', projectedSpend: 'Projeção de gasto', budgetChanged: 'Orçamento alterado no período',
+    matureSpend: 'Gasto com janela madura', results: 'Resultados medidos', costPerResult: 'Custo por resultado',
+    targetCost: 'Meta de custo', projectedVolume: 'Volume projetado', targetVolume: 'Meta de volume',
+    syncStatus: 'Status da sincronização', syncError: 'Erro da sincronização', noDeliveryDates: 'Dias sem veiculação',
+    missingDates: 'Dias não consultados', formula: 'Fórmula', attributionWindow: 'Atribuição', coveredThrough: 'Coberto até',
+    unsupportedCurrencies: 'Moedas incompatíveis',
+    diary_reference: 'Registro no diário', note: 'Anotação',
+  };
+  const details = Object.entries(keys).filter(([key]) => evidence[key] != null).map(([key, title]) => `<li><strong>${title}:</strong> ${escapeHtml(Array.isArray(evidence[key]) ? evidence[key].join(', ') : String(evidence[key]))}</li>`).join('');
+  const interventions = state.alertInterventions.filter((item) => item.alerta_id === alert.id);
+  return `<article class="panel" style="margin-bottom:1rem">
+    <div class="panel-header"><div><p class="eyebrow">${escapeHtml(alert.categoria || 'atenção')} · ${escapeHtml(alert.severidade)} · confiança ${escapeHtml(alert.confianca || 'não informada')}</p>
+      <h3>${escapeHtml(alert.clientes?.nome_empresa || alert.nome_cliente || 'Cliente')} — ${escapeHtml(alert.rule_key || 'anotação do diário')}</h3>
+      <p class="muted">${escapeHtml(alert.period_start || '')} a ${escapeHtml(alert.period_end || '')} · dados até ${escapeHtml(evidence.coveredThrough || 'indisponível')} · responsável: ${escapeHtml(alert.responsavel || 'não atribuído')}</p></div>
+      <span class="status-badge">${escapeHtml(alert.status)}</span></div>
+    <p><strong>Hipótese:</strong> ${escapeHtml(alert.hipotese || 'Não registrada')}</p>
+    <p><strong>Próximo passo:</strong> ${escapeHtml(alert.proximo_passo || 'Revisar a conta')}</p>
+    ${alert.impacto_estimado == null ? '' : `<p><strong>Impacto estimado:</strong> ${money(alert.impacto_estimado)}. Estimativa condicionada à hipótese.</p>`}
+    <details><summary>Evidência e comparação</summary><ul>${details}</ul><p class="muted">Fonte: ${escapeHtml(evidence.source || 'não registrada')} · ${escapeHtml(evidence.timezone || '')} · ${escapeHtml(evidence.currency || '')}. Comparação com meta cadastrada ou plano de orçamento, quando disponível.</p></details>
+    ${interventions.map((item) => {
+      const metric = alert.objetivo === 'vendas' ? 'vendas' : alert.objetivo === 'mensagens' ? 'mensagens' : 'leads';
+      const comparison = alert.metrica === 'diario' ? { status: 'missing', reason: 'Anotação sem métrica definida para comparação.' } : compareIntervention(item, state.metaAdsDailyInsights, metric, isoDate(new Date()), alert.meta_ads_act);
+      return `<p class="muted">Intervenção ${date(item.executado_em)}: ${escapeHtml(item.acao)}. ${comparison.status === 'measured' ? `Antes (${item.periodo_antes_inicio} a ${item.periodo_antes_fim}): ${money(comparison.before.spend)} e ${number(comparison.before.results)} resultados; depois (${item.periodo_depois_inicio} a ${item.periodo_depois_fim}): ${money(comparison.after.spend)} e ${number(comparison.after.results)} resultados.` : escapeHtml(comparison.reason)} Comparação antes/depois não prova causalidade.</p>`;
+    }).join('')}
+    <div class="row-actions screen-only">
+      ${alert.tarefa_id ? '<span class="muted">Tarefa vinculada</span>' : `<button class="secondary-button" data-action="alerta-to-task" data-id="${alert.id}">Criar tarefa</button>`}
+      <button class="secondary-button" data-action="attention-intervene" data-id="${alert.id}">Registrar intervenção</button>
+      ${alert.status === 'ativo' ? `<button class="secondary-button" data-action="attention-ack" data-id="${alert.id}">Reconhecer</button><button class="secondary-button" data-action="attention-snooze" data-id="${alert.id}">Adiar</button>` : ''}
+      ${alert.status !== 'resolvido' ? `<button class="secondary-button" data-action="attention-resolve" data-id="${alert.id}">Resolver</button>` : ''}
+    </div>
+  </article>`;
+}
+
+function openAttentionIntervention(alertId) {
+  const alert = state.alertas.find((row) => row.id === alertId && row.cliente_id && (row.rule_key || row.metrica === 'diario'));
+  if (!alert) return;
+  modalEyebrow.textContent = 'Central de Atenção';
+  modalTitle.textContent = 'Registrar intervenção';
+  modalForm.innerHTML = `<div class="form-grid"><label>Data da ação<input class="input" type="date" name="executado_em" value="${isoDate(new Date())}" required></label><label class="full">O que foi feito<textarea name="acao" required maxlength="2000"></textarea></label><p class="muted full">A comparação usará sete dias completos antes e sete dias completos depois da ação, da mesma fonte. Ela não prova causalidade.</p><div class="form-actions"><button type="button" class="secondary-button" data-modal-cancel>Cancelar</button><button class="button" type="submit">Registrar</button></div></div>`;
+  modalBackdrop.hidden = false;
+  modalForm.querySelector('[data-modal-cancel]')?.addEventListener('click', closeModal);
+  modalForm.onsubmit = async (event) => {
+    event.preventDefault();
+    const fd = new FormData(event.target);
+    const day = String(fd.get('executado_em'));
+    const action = String(fd.get('acao') || '').trim();
+    if (!action) return;
+    const ranges = interventionRanges(day);
+    try {
+      await attentionService.addIntervention({ alerta_id: alert.id, cliente_id: alert.cliente_id, acao: action, registrado_por: state.session?.user?.email || null, executado_em: day + 'T12:00:00Z', periodo_antes_inicio: ranges.beforeStart, periodo_antes_fim: ranges.beforeEnd, periodo_depois_inicio: ranges.afterStart, periodo_depois_fim: ranges.afterEnd });
+      closeModal();
+      await loadAll(); render(); toast('Intervenção registrada.');
+    } catch (error) { showError(error); }
+  };
 }
 
 function isImprovingAlert(alerta) {
@@ -4444,6 +4670,7 @@ function bindGlobalActions() {
     if (action === 'new-related') el.addEventListener('click', () => openForm(el.dataset.entity, null, { cliente_id: state.detailClienteId }));
     if (action === 'edit') el.addEventListener('click', () => openForm(el.dataset.entity, el.dataset.id));
     if (action === 'delete') el.addEventListener('click', () => handleDelete(el.dataset.entity, el.dataset.id));
+    if (action === 'mark-subscription-paid') el.addEventListener('click', () => markSubscriptionPaid(el.dataset.id));
     if (action === 'export') el.addEventListener('click', () => exportEntity(el.dataset.entity));
     if (action === 'print') el.addEventListener('click', () => window.print());
     if (action === 'refresh') el.addEventListener('click', async () => { await loadAll(); render(); toast('Dados atualizados.'); });
@@ -4588,6 +4815,14 @@ function bindGlobalActions() {
       const payload = {
         cliente_id: cid,
         objetivo: draft.objetivo,
+        canal: draft.canal || 'meta_ads',
+        periodo_inicio: draft.periodo_inicio || null,
+        periodo_fim: draft.periodo_fim || null,
+        meta_volume: draft.meta_volume ? Number(draft.meta_volume) : null,
+        orcamento_periodo: draft.orcamento_periodo ? Number(draft.orcamento_periodo) : null,
+        meta_custo_qualificado: draft.meta_custo_qualificado ? Number(draft.meta_custo_qualificado) : null,
+        meta_custo_venda: draft.meta_custo_venda ? Number(draft.meta_custo_venda) : null,
+        margem_contribuicao_pct: draft.margem_contribuicao_pct ? Number(draft.margem_contribuicao_pct) : null,
         meta_custo_resultado: draft.meta_custo_resultado !== '' && draft.meta_custo_resultado != null ? Number(draft.meta_custo_resultado) : null,
         meta_roas_minimo: draft.meta_roas_minimo !== '' && draft.meta_roas_minimo != null ? Number(draft.meta_roas_minimo) : null,
         meta_ctr_minimo: draft.meta_ctr_minimo !== '' && draft.meta_ctr_minimo != null ? Number(draft.meta_ctr_minimo) : null,
@@ -4632,22 +4867,24 @@ function bindGlobalActions() {
     });
     if (action === 'alerta-filtro-status') el.addEventListener('click', () => { state.alertasFiltroStatus = el.dataset.val; render(); });
     if (action === 'alerta-filtro-sev') el.addEventListener('click', () => { state.alertasFiltroSeveridade = el.dataset.val; render(); });
+    if (action === 'attention-ack') el.addEventListener('click', async () => {
+      try { await attentionService.setStatus(el.dataset.id, 'reconhecido', { reconhecido_em: new Date().toISOString() }); await loadAll(); render(); toast('Ocorrência reconhecida.'); } catch (error) { showError(error); }
+    });
+    if (action === 'attention-snooze') el.addEventListener('click', async () => {
+      const until = isoDate(new Date(Date.now() + 3 * 86400000));
+      try { await attentionService.setStatus(el.dataset.id, 'adiado', { adiado_ate: until }); await loadAll(); render(); toast('Ocorrência adiada por três dias.'); } catch (error) { showError(error); }
+    });
+    if (action === 'attention-resolve') el.addEventListener('click', async () => {
+      try { await attentionService.setStatus(el.dataset.id, 'resolvido', { resolvido_em: new Date().toISOString(), resolvido_por: state.session?.user?.email || null }); await loadAll(); render(); toast('Ocorrência resolvida.'); } catch (error) { showError(error); }
+    });
+    if (action === 'attention-intervene') el.addEventListener('click', () => openAttentionIntervention(el.dataset.id));
     if (action === 'run-verificacao') el.addEventListener('click', async () => {
       el.disabled = true;
-      el.innerHTML = '<i data-lucide="loader-circle"></i>Verificando...';
-      renderLucide();
       try {
-        const res = await fetch('https://automacao2.themidiamarketing.com.br/webhook/alertas-verificacao', { method: 'POST' });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        toast('Verificacao iniciada! Os alertas serao atualizados em instantes.');
-        setTimeout(async () => { await loadAll(); render(); }, 8000);
-      } catch (e) {
-        toast(`Erro ao iniciar verificacao: ${e.message}`, 'error');
-      } finally {
-        el.disabled = false;
-        el.innerHTML = '<i data-lucide="play"></i>Fazer verificacao';
-        renderLucide();
-      }
+        const result = await attentionService.evaluate();
+        await loadAll(); render();
+        toast(`Verificação concluída: ${result.count} ocorrência(s) avaliadas.`);
+      } catch (error) { showError(error); el.disabled = false; }
     });
     if (action === 'whatsapp-instance') el.addEventListener('input', () => {
       state.whatsapp.instanceName = sanitizeInstanceName(el.value);
@@ -5813,6 +6050,8 @@ async function createTaskFromDiary(id, clienteId, entryDate) {
 function createTaskFromAlerta(alertaId) {
   const alerta = state.alertas.find((a) => a.id === alertaId);
   if (!alerta) return;
+  if (!alerta.cliente_id) { toast('Vincule o alerta a um cliente antes de criar tarefa.', 'error'); return; }
+  if (alerta.tarefa_id) { toast('Este alerta já tem uma tarefa vinculada.'); return; }
 
   const metricaLabel = { cpl: 'CPL', ctr: 'CTR', roas: 'ROAS', spend: 'Gasto diario', diario: 'Anotacao do diario' };
   const isMonetary = ['cpl', 'spend'].includes(alerta.metrica);
@@ -5868,7 +6107,7 @@ function createTaskFromAlerta(alertaId) {
     event.preventDefault();
     const fd = new FormData(event.target);
     try {
-      await tarefaService.create({
+      const taskPayload = {
         cliente_id: alerta.cliente_id || null,
         titulo: fd.get('titulo'),
         descricao: fd.get('descricao') || null,
@@ -5876,7 +6115,8 @@ function createTaskFromAlerta(alertaId) {
         prioridade: fd.get('prioridade') || 'media',
         status: 'pendente',
         data_vencimento: fd.get('data_vencimento') || null,
-      });
+      };
+      await attentionService.createTaskOnce(alerta.id, taskPayload);
       closeModal();
       await loadAll();
       render();
@@ -6053,6 +6293,20 @@ function getFormSchema(entity) {
         { name: 'observacoes', label: 'Observacoes', type: 'textarea' },
       ],
     },
+    assinaturas: {
+      title: 'Gasto ou assinatura',
+      fields: [
+        { name: 'nome', label: 'Nome', required: true, default: 'ChatGPT' },
+        { name: 'fornecedor', label: 'Fornecedor' },
+        { name: 'categoria', label: 'Categoria', type: 'select', options: ['software', 'marketing', 'infraestrutura', 'financeiro', 'educacao', 'outro'], default: 'software', required: true },
+        { name: 'valor', label: 'Valor da cobranca', type: 'number', required: true },
+        { name: 'recorrencia', label: 'Recorrencia', type: 'select', options: ['mensal', 'trimestral', 'semestral', 'anual', 'unica'], default: 'mensal', required: true },
+        { name: 'proximo_vencimento', label: 'Proximo vencimento', type: 'date', required: true, default: isoDate(new Date()) },
+        { name: 'forma_pagamento', label: 'Forma de pagamento', type: 'select', options: ['cartao_credito', 'pix', 'boleto', 'debito_automatico', 'outro'] },
+        { name: 'status', label: 'Status', type: 'select', options: ['ativa', 'pausada', 'cancelada'], default: 'ativa', required: true },
+        { name: 'observacoes', label: 'Observacoes', type: 'textarea' },
+      ],
+    },
     tarefas: {
       title: 'Tarefa',
       fields: [
@@ -6118,6 +6372,19 @@ function getFormSchema(entity) {
       fields: [
         clientSelect,
         { name: 'objetivo', label: 'Objetivo principal', type: 'select', options: ['mensagens', 'leads', 'vendas', 'seguidores'], required: true },
+        { name: 'canal', label: 'Canal', type: 'select', options: ['meta_ads', 'google_ads'], default: 'meta_ads' },
+        { name: 'periodo_inicio', label: 'Início do período', type: 'date' },
+        { name: 'periodo_fim', label: 'Fim do período', type: 'date' },
+        { name: 'meta_volume', label: 'Meta de volume', type: 'number' },
+        { name: 'orcamento_periodo', label: 'Orçamento do período', type: 'number' },
+        { name: 'meta_custo_qualificado', label: 'Custo por qualificado', type: 'number' },
+        { name: 'meta_custo_venda', label: 'Custo por venda', type: 'number' },
+        { name: 'margem_contribuicao_pct', label: 'Margem de contribuição (%)', type: 'number' },
+        { name: 'gasto_minimo_analise', label: 'Gasto mínimo para análise', type: 'number', default: '100' },
+        { name: 'resultados_minimos_analise', label: 'Resultados mínimos para análise', type: 'number', default: '5' },
+        { name: 'janela_conversao_dias', label: 'Aguardar conversões (dias)', type: 'number', default: '3' },
+        { name: 'cobertura_minima_pct', label: 'Cobertura mínima (%)', type: 'number', default: '95' },
+        { name: 'responsavel', label: 'Responsável' },
         { name: 'meta_custo_resultado', label: 'Meta custo por resultado (R$)', type: 'number', full: false },
         { name: 'meta_roas_minimo', label: 'ROAS mínimo', type: 'number', full: false },
         { name: 'meta_ctr_minimo', label: 'CTR mínimo (%)', type: 'number', full: false },
@@ -6146,6 +6413,7 @@ function getService(entity) {
     diario: diarioBordoService,
     metas: metaClienteService,
     vendas: vendaClienteService,
+    assinaturas: assinaturaService,
   }[entity];
 }
 
@@ -6156,6 +6424,7 @@ function getEntityList(entity) {
     campanhas: state.campanhas,
     relatorios: state.relatorios,
     vendas: state.vendas,
+    assinaturas: state.assinaturas,
     tarefas: state.tarefas,
     diario: state.diarios,
     equipe: state.equipe,
