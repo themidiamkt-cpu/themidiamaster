@@ -2,7 +2,7 @@ import { PGlite } from '@electric-sql/pglite';
 import { readFileSync } from 'node:fs';
 const db = new PGlite();
 await db.exec(`
-create role anon; create role authenticated;
+create role anon; create role authenticated; create role service_role;
 create schema auth;
 create function auth.uid() returns uuid language sql stable as $$ select null::uuid $$;
 create function public.can_access_cliente(uuid) returns boolean language sql stable as $$ select true $$;
@@ -52,4 +52,52 @@ try { await db.exec("insert into public.google_ads_daily_facts(cliente_id,custom
 if (!googleWriteDenied) throw new Error('Google authenticated write unexpectedly allowed');
 await db.exec('reset role');
 console.log('migration isolated: RLS scoped read, write denied');
+await db.exec(`
+create table public.metas_cliente(
+  id uuid primary key default gen_random_uuid(), cliente_id uuid not null references public.clientes(id),
+  objetivo text not null, ativo boolean default true, created_at timestamptz default now()
+);
+create table public.tarefas(
+  id uuid primary key default gen_random_uuid(), cliente_id uuid references public.clientes(id),
+  titulo text not null, descricao text, responsavel text, prioridade text, status text, data_vencimento date
+);
+create table public.alertas_anomalia(
+  id uuid primary key default gen_random_uuid(), cliente_id uuid references public.clientes(id),
+  nome_cliente text not null, meta_ads_act text not null, metrica text not null, tipo_alerta text,
+  objetivo text, meta_id uuid, severidade text not null, status text not null,
+  periodo_referencia text, valor_atual numeric, valor_referencia numeric, variacao_pct numeric,
+  resolvido_em timestamptz, resolvido_por text, created_at timestamptz default now(), updated_at timestamptz default now()
+);
+alter table public.alertas_anomalia enable row level security;
+alter table public.tarefas enable row level security;
+grant select, update on public.alertas_anomalia to authenticated;
+grant insert, select on public.tarefas to authenticated;
+create policy test_alert on public.alertas_anomalia for all to authenticated using (public.can_access_cliente(cliente_id)) with check (public.can_access_cliente(cliente_id));
+create policy test_task on public.tarefas for all to authenticated using (public.can_access_cliente(cliente_id)) with check (public.can_access_cliente(cliente_id));
+insert into public.metas_cliente(id,cliente_id,objetivo) values ('00000000-0000-4000-8000-000000000003','00000000-0000-4000-8000-000000000001','leads');
+`);
+await db.exec(readFileSync('supabase/migrations/20260922030000_attention_center.sql','utf8'));
+await db.exec(`
+insert into public.metas_cliente(id,cliente_id,objetivo) values ('00000000-0000-4000-8000-000000000004','00000000-0000-4000-8000-000000000002','leads');
+insert into public.meta_budget_revisions(meta_id,cliente_id,effective_on,orcamento_periodo)
+values ('00000000-0000-4000-8000-000000000004','00000000-0000-4000-8000-000000000002','2026-09-01',500);
+`);
+const payload = JSON.stringify({ rule: 'coverage', clienteId: '00000000-0000-4000-8000-000000000001', clientName: 'A', accountId: 'act_123', metric: 'coverage', objective: 'leads', metaId: '00000000-0000-4000-8000-000000000003', severity: 'alta', periodStart: '2026-09-01', periodEnd: '2026-09-30', category: 'dados', confidence: 'alta', evidence: { missingDays: 1 }, hypothesis: 'missing', nextStep: 'reprocess', owner: 'A' });
+const escaped = payload.replaceAll("'", "''");
+await db.exec(`select public.save_attention_alert('${escaped}'::jsonb); select public.save_attention_alert('${escaped}'::jsonb);`);
+const alertCount = await db.query("select count(*)::int as n from public.alertas_anomalia where rule_key='coverage:leads:meta_ads'");
+if (alertCount.rows[0].n !== 1) throw new Error('attention alert duplicate');
+await db.exec("set request.jwt.claim.client_id = '00000000-0000-4000-8000-000000000001'; set role authenticated");
+const budgetScoped = await db.query('select count(*)::int as n from public.meta_budget_revisions');
+if (budgetScoped.rows[0].n !== 0) throw new Error('budget RLS leaked other client');
+let budgetWriteDenied = false;
+try { await db.exec("insert into public.meta_budget_revisions(meta_id,cliente_id,effective_on,orcamento_periodo) values ('00000000-0000-4000-8000-000000000003','00000000-0000-4000-8000-000000000001','2026-09-01',100)"); } catch { budgetWriteDenied = true; }
+if (!budgetWriteDenied) throw new Error('budget write unexpectedly allowed');
+const task = await db.query("select public.create_alert_task_once((select id from public.alertas_anomalia where rule_key='coverage:leads:meta_ads'),'Review','Evidence','A','alta','2026-09-23') as id");
+const taskAgain = await db.query("select public.create_alert_task_once((select id from public.alertas_anomalia where rule_key='coverage:leads:meta_ads'),'Review','Evidence','A','alta','2026-09-23') as id");
+if (task.rows[0].id !== taskAgain.rows[0].id) throw new Error('duplicate task');
+await db.exec('reset role');
+const taskCount = await db.query('select count(*)::int as n from public.tarefas');
+if (taskCount.rows[0].n !== 1) throw new Error('duplicate task inserted');
+console.log('attention migration isolated: alert and task deduplication');
 await db.close();
