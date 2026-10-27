@@ -2677,23 +2677,48 @@ function buildMetaWhatsappReport(report) {
   const roas = metrics.roas.value;
   const goalMetric = getMetaPrimaryMetric(report);
   const previousGoalMetric = previous ? getMetaPrimaryMetric({ ...report, totals: previous }) : null;
-  const positives = buildMetaPositivePoints(report, goalMetric, previousGoalMetric, getMetaBusinessContext(report), { revenue: metaRevenue, roas });
-  return [
-    `📊 RELATÓRIO SEMANAL – ${String(report.cliente.nome_empresa || 'CLIENTE').toUpperCase()}`,
-    `Período: ${date(report.since)} a ${date(report.until)} (America/Sao_Paulo)`,
-    'Fonte: Meta Graph API · moeda: BRL · atribuição: configuração Meta, janela não registrada',
-    `Investimento Meta: ${formatMetricWithVariation(report.totals.investimento, previous?.investimento, money)}`,
-    `${goalMetric.label} Meta: ${formatMetricWithVariation(goalMetric.value, previousGoalMetric?.value, goalMetric.formatter)}`,
-    `${goalMetric.costLabel}: ${metricText(goalMetric.cost, money)}`,
-    `Receita atribuída Meta: ${formatMetricWithVariation(metaRevenue, previous?.faturamento, money)}`,
-    `ROAS atribuído Meta: ${metricText(roas, (v) => `${v.toFixed(2)}x`)}`,
-    `Vendas operacionais registradas: ${metricText(operationalRevenue, money)} (sem conciliação com Meta)`,
-    `Alcance único da conta: ${metricText(report.totals.alcance, number)}`,
-    `Cliques Meta: ${formatMetricWithVariation(report.totals.cliques, previous?.cliques, number)}`,
-    `Destaque no período: ${getMetaWeeklyHighlight(report)}`,
-    `Pontos observados: ${positives.length ? positives.join(' ') : 'Sem melhora confirmada pelos dados comparáveis.'}`,
-    'Resumo: resultados medidos pela Meta; vendas operacionais exibidas separadamente. Verificar cobertura comercial antes de atribuir receita adicional à mídia.',
-  ].join('\n');
+  const context = getMetaBusinessContext(report);
+  const positives = buildMetaPositivePoints(report, goalMetric, previousGoalMetric, context, { revenue: metaRevenue, roas });
+  const attention = buildMetaAttentionPoints(report, goalMetric, previousGoalMetric, metaRevenue, operationalRevenue);
+  const lines = [
+    `📊 *Relatório semanal — ${String(report.cliente.nome_empresa || 'Cliente').toUpperCase()}*`,
+    `_${date(report.since)} a ${date(report.until)}_`,
+    '',
+    '*Resumo da semana*',
+    `• Investimento: ${formatMetricWithVariation(report.totals.investimento, previous?.investimento, money)}`,
+    `• ${goalMetric.label}: ${formatMetricWithVariation(goalMetric.value, previousGoalMetric?.value, goalMetric.formatter)}`,
+    `• ${goalMetric.costLabel}: ${metricText(goalMetric.cost, money)}`,
+    `• Receita atribuída pela Meta: ${formatMetricWithVariation(metaRevenue, previous?.faturamento, money)}`,
+    `• ROAS atribuído: ${metricText(roas, (v) => `${v.toFixed(2)}x`)}`,
+  ];
+
+  if (operationalRevenue != null) lines.push(`• Receita registrada no sistema: ${money(operationalRevenue)}`);
+
+  lines.push('', '*Leitura da semana*');
+  if (positives.length) positives.slice(0, 2).forEach((point) => lines.push(`• ${point}`));
+  else lines.push('• Não houve melhora confirmada nos dados comparáveis desta semana.');
+
+  if (attention.length) {
+    lines.push('', '*Pontos de atenção*');
+    attention.slice(0, 2).forEach((point) => lines.push(`• ${point}`));
+  }
+
+  lines.push('', `*Melhor anúncio:* ${getMetaWeeklyHighlight(report)}`);
+  lines.push('', '_Receita e ROAS são atribuídos pela Meta. Vendas registradas no sistema ainda não estão conciliadas com os anúncios._');
+  return lines.join('\n');
+}
+
+function buildMetaAttentionPoints(report, goalMetric, previousGoalMetric, metaRevenue, operationalRevenue) {
+  const points = [];
+  const goalVariation = getVariationPercent(goalMetric.value, previousGoalMetric?.value);
+  const costVariation = getVariationPercent(goalMetric.cost, previousGoalMetric?.cost);
+  const revenueVariation = getVariationPercent(metaRevenue, report.previous?.totals?.faturamento);
+
+  if (goalVariation != null && goalVariation < 0) points.push(`${goalMetric.label} caiu ${Math.abs(goalVariation).toFixed(0)}% em relação à semana anterior.`);
+  if (costVariation != null && costVariation > 0) points.push(`O ${goalMetric.costLabel.toLowerCase()} subiu ${costVariation.toFixed(0)}% em relação à semana anterior.`);
+  if (revenueVariation != null && revenueVariation < 0) points.push(`A receita atribuída pela Meta caiu ${Math.abs(revenueVariation).toFixed(0)}% no período.`);
+  if (operationalRevenue == null) points.push('Ainda não há receita registrada no sistema para conciliar com a atribuição da Meta.');
+  return points;
 }
 
 function getMetaBusinessContext(report) {
