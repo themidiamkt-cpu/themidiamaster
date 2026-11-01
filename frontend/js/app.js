@@ -1,3 +1,4 @@
+import { renderMindmaps, bindMindmaps, resetMindmaps, canLeaveMindmaps } from './mindmaps/view.js';
 import { aggregateClientMetrics, deriveReportMetrics, summarizeMetaRows as summarizeMetaRowsCore } from './metrics.js';
 import { compareIntervention, interventionRanges } from './attentionComparison.js';
 import { ensureSession, isSupabaseConfigured, supabase } from './supabase.js';
@@ -34,7 +35,7 @@ const initialMetaDateRange = getDefaultDateRange();
 const whatsappWebhookUrl = 'https://automacao2.themidiamarketing.com.br/webhook/conectar-cliente';
 const mainAdminEmail = 'themidiamkt@gmail.com';
 const viewStorageKey = 'theMidiaMaster.activeView';
-const adminViews = ['dashboard', 'dashboardClientes', 'clientes', 'relatorios', 'gastos', 'metaAds', 'googleAds', 'tarefas', 'playbooks', 'creativeIntelligence', 'equipe', 'metas', 'config'];
+const adminViews = ['dashboard', 'dashboardClientes', 'clientes', 'relatorios', 'gastos', 'metaAds', 'googleAds', 'tarefas', 'playbooks', 'creativeIntelligence', 'mindmaps', 'equipe', 'metas', 'config'];
 const trafficManagerViews = ['dashboardClientes', 'clientes', 'metaAds', 'googleAds', 'tarefas', 'playbooks', 'metas'];
 const teamViews = trafficManagerViews;
 
@@ -661,6 +662,7 @@ function applyNavPermissions() {
 }
 
 function navigate(view) {
+  if (state.view === 'mindmaps' && view !== 'mindmaps' && !canLeaveMindmaps()) return;
   if (!canAccessView(view)) {
     state.view = getDefaultView();
   } else {
@@ -675,6 +677,7 @@ function navigate(view) {
 }
 
 function render() {
+  resetMindmaps(state.session?.user?.id || null);
   if (!isSupabaseConfigured) {
     document.body.classList.remove('auth-only');
     app.innerHTML = renderConfig();
@@ -721,6 +724,7 @@ function render() {
     tarefas: renderTarefas,
     playbooks: renderPlaybooks,
     creativeIntelligence: renderCreativeIntelligence,
+    mindmaps: renderMindmaps,
     equipe: renderEquipe,
     metas: renderMetas,
     config: renderConfig,
@@ -728,6 +732,7 @@ function render() {
   app.innerHTML = `${renderLoadErrorBanner()}${views[state.view]?.() || renderDashboard()}`;
   bindGlobalActions();
   if (state.view === 'creativeIntelligence') bindCreativeIntelligence({ rerender: render, getClientes: () => state.clientes });
+  if (state.view === 'mindmaps') bindMindmaps({ rerender: render });
   renderLucide();
 }
 
@@ -787,6 +792,7 @@ function bindLogin() {
 
 async function logout() {
   teardownCrmRealtime();
+  if (state.view === 'mindmaps' && !canLeaveMindmaps()) return;
   await supabase.auth.signOut();
   state.session = null;
   state.activeConversationLeadId = null;
