@@ -28,8 +28,9 @@ function connectionPaths(positions) {
     (map.connections || []).filter(c => byId.has(c.from) && byId.has(c.to)).map(c => `<path class="mm-crosslink" d="${curve(byId.get(c.from), byId.get(c.to))}" stroke="#db2777" marker-end="url(#mm-arrow)"/>`).join('');
 }
 function tree() {
-  const { positions, width, height } = layout(map);
-  return `<div class="mm-scroll ${connecting ? 'mm-connecting' : ''}" tabindex="0" aria-label="Mapa mental. Arraste os cards para organizar. Tab cria subtópico; Enter cria irmão; F2 edita."><div class="mm-plane" style="width:${width * zoom}px;height:${height * zoom}px"><div class="mm-world" style="width:${width}px;height:${height}px;transform:scale(${zoom})"><svg width="${width}" height="${height}" aria-hidden="true"><defs><marker id="mm-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#db2777" stroke="none"/></marker></defs><g class="mm-lines">${connectionPaths(positions)}</g></svg>${positions.map(n => `<button type="button" class="mm-topic ${selected === n.id ? 'selected' : ''}" data-topic="${esc(n.id)}" style="left:${n.x}px;top:${n.y}px;--topic-color:${n.color}" aria-pressed="${selected === n.id}">${esc(n.text)}${n.collapsed ? '<small>Ramo recolhido</small>' : ''}</button>`).join('')}</div></div></div>`;
+  const { positions, width: mapWidth, height: mapHeight } = layout(map);
+  const width = Math.max(2400, mapWidth + 1200), height = Math.max(1800, mapHeight + 1200);
+  return `<div class="mm-scroll ${connecting ? 'mm-connecting' : ''}" tabindex="0" aria-label="Mapa mental. Arraste os cards para organizar. Tab cria subtópico; Enter cria irmão; F2 edita."><div class="mm-plane" style="width:${width * zoom}px;height:${height * zoom}px"><div class="mm-world" style="width:${width}px;height:${height}px;transform:scale(${zoom})"><div class="mm-scene" style="position:absolute;transform:translate(600px,600px)"><svg width="${width}" height="${height}" aria-hidden="true"><defs><marker id="mm-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#db2777" stroke="none"/></marker></defs><g class="mm-lines">${connectionPaths(positions)}</g></svg>${positions.map(n => `<button type="button" class="mm-topic ${selected === n.id ? 'selected' : ''}" data-topic="${esc(n.id)}" style="left:${n.x}px;top:${n.y}px;--topic-color:${n.color}" aria-pressed="${selected === n.id}">${esc(n.text)}${n.collapsed ? '<small>Ramo recolhido</small>' : ''}</button>`).join('')}</div></div></div></div>`;
 }
 export function renderMindmaps() {
   if (!map) { map = newMap(); saved = JSON.stringify(map); }
@@ -40,7 +41,7 @@ export function renderMindmaps() {
     <div class="mm-notice" role="status">${esc(message || (dirty() ? 'Alterações não salvas' : (record ? 'Mapa salvo' : 'Rascunho — salve para guardar no Master.')))}</div>
     ${showTemplates ? `<div class="mm-templates">${templates.map(t => `<button type="button" data-template="${t.id}"><strong>${esc(t.title)}</strong><span>${esc(t.description)}</span><small>Usar modelo →</small></button>`).join('')}</div>` : ''}
     <div class="mm-top"><label>Nome do mapa<input id="mm-title" maxlength="160" value="${esc(map.title)}"></label><div class="mm-actions">${button('undo', 'Desfazer', !history.length)}${button('redo', 'Refazer', !future.length)}${button('export', 'Exportar JSON')}${button('import', 'Importar JSON', busy)}<input type="file" id="mm-file" accept=".json,application/json" hidden></div></div>
-    <div class="mm-layout"><div><div class="mm-tools">${button('child', '+ Subtópico')}${button('sibling', '+ Irmão', node.parent === null)}${button('collapse', node.collapsed ? 'Expandir ramo' : 'Recolher ramo')}${button('connect', connecting ? 'Cancelar conexão' : 'Interligar cards')}${button('arrange', 'Organizar automaticamente')}${button('minus', '−') }<span>${Math.round(zoom * 100)}%</span>${button('plus', '+')}${button('fit', 'Enquadrar')}</div>${tree()}<p class="muted">Arraste os cards para organizar · Interligar cards: selecione a origem e clique no destino · Tab: subtópico · Enter: irmão</p></div>
+    <div class="mm-layout"><div><div class="mm-tools">${button('child', '+ Subtópico')}${button('sibling', '+ Irmão', node.parent === null)}${button('collapse', node.collapsed ? 'Expandir ramo' : 'Recolher ramo')}${button('connect', connecting ? 'Cancelar conexão' : 'Interligar cards')}${button('arrange', 'Organizar automaticamente')}${button('minus', '−') }<span data-mm-zoom>${Math.round(zoom * 100)}%</span>${button('plus', '+')}${button('fit', 'Enquadrar')}</div>${tree()}<p class="muted">Arraste o fundo para navegar · Roda do mouse: zoom · Arraste os cards para organizar · Interligar cards: selecione a origem e clique no destino · Tab: subtópico · Enter: irmão</p></div>
     <aside class="mm-inspector"><h3>Tópico selecionado</h3><label>Texto<textarea id="mm-text" maxlength="500" rows="3">${esc(node.text)}</textarea></label><label>Cor<input type="color" id="mm-color" value="${node.color}"></label><label>Notas<textarea id="mm-notes" maxlength="10000" rows="5">${esc(node.notes)}</textarea></label>${node.parent !== null ? `<label>Mover para outro tópico<select id="mm-parent">${map.nodes.filter(n => !excluded.has(n.id)).map(n => `<option value="${esc(n.id)}" ${n.id === node.parent ? 'selected' : ''}>${esc(n.text)}</option>`).join('')}</select></label>${button('delete', 'Excluir tópico e descendentes')}` : '<p class="muted">Este é o tópico central do mapa.</p>'}<div class="mm-connections"><h3>Conexões extras</h3>${(map.connections || []).map((c, i) => [c, i]).filter(([c]) => c.from === selected || c.to === selected).map(([c, i]) => `<div><span>${esc(map.nodes.find(n => n.id === (c.from === selected ? c.to : c.from))?.text)}</span><button type="button" class="secondary-button" data-remove-link="${i}" aria-label="Remover conexão">×</button></div>`).join('') || '<p class="muted">Use Interligar cards para conectar este tópico a outro.</p>'}</div></aside></div><div id="mm-library"></div></section>`;
 }
 export function bindMindmaps({ rerender }) {
@@ -51,7 +52,7 @@ export function bindMindmaps({ rerender }) {
   };
   root.querySelectorAll('[data-template]').forEach(el => el.onclick = () => {
     if (busy || !canLeaveMindmaps()) return;
-    map = fromTemplate(el.dataset.template); record = null; saved = ''; pending = false; selected = null; history = []; future = []; connecting = null; showTemplates = false; zoom = .65; message = 'Modelo pronto para personalizar. Salve para guardar no Master.'; refresh();
+    map = fromTemplate(el.dataset.template); record = null; saved = ''; pending = false; selected = null; history = []; future = []; connecting = null; showTemplates = false; zoom = .65; message = 'Modelo pronto para personalizar. Salve para guardar no Master.'; refresh(); const view = document.querySelector('.mm-scroll'); view.scrollLeft = 600 * zoom; view.scrollTop = 600 * zoom;
   });
   root.querySelectorAll('[data-remove-link]').forEach(el => el.onclick = () => { mutate(() => { map.connections.splice(Number(el.dataset.removeLink), 1); }); refresh(); });
   const focusTopic = () => document.querySelector(`[data-topic="${CSS.escape(selected)}"]`)?.focus();
@@ -117,6 +118,33 @@ export function bindMindmaps({ rerender }) {
   for (const [id, field] of [['mm-text', 'text'], ['mm-color', 'color'], ['mm-notes', 'notes']]) root.querySelector(`#${id}`).onchange = event => { mutate(() => { map.nodes.find(n => n.id === selected)[field] = event.target.value; }); event.target.value = map.nodes.find(n => n.id === selected)[field]; syncFields(); };
   root.querySelector('#mm-title').onchange = event => { mutate(() => { map.title = event.target.value; }); event.target.value = map.title; syncFields(); };
   root.querySelector('#mm-parent')?.addEventListener('change', event => { mutate(() => reparent(map, selected, event.target.value)); refresh(); });
+  const viewport = root.querySelector('.mm-scroll');
+  viewport.scrollLeft = 600 * zoom; viewport.scrollTop = 600 * zoom;
+  viewport.onpointerdown = event => {
+    if (event.button !== 0 || event.target.closest('.mm-topic')) return;
+    event.preventDefault();
+    const origin = { x: event.clientX, y: event.clientY, left: viewport.scrollLeft, top: viewport.scrollTop };
+    viewport.setPointerCapture(event.pointerId); viewport.classList.add('mm-panning');
+    viewport.onpointermove = e => { viewport.scrollLeft = origin.left - (e.clientX - origin.x); viewport.scrollTop = origin.top - (e.clientY - origin.y); };
+    const finish = () => {
+      viewport.onpointermove = null; viewport.onpointerup = null; viewport.onpointercancel = null; viewport.classList.remove('mm-panning');
+      if (viewport.hasPointerCapture(event.pointerId)) viewport.releasePointerCapture(event.pointerId);
+    };
+    viewport.onpointerup = finish; viewport.onpointercancel = finish;
+  };
+  viewport.addEventListener('wheel', event => {
+    event.preventDefault();
+    const bounds = viewport.getBoundingClientRect();
+    const x = event.clientX - bounds.left - viewport.clientLeft, y = event.clientY - bounds.top - viewport.clientTop;
+    const oldZoom = zoom;
+    const units = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? viewport.clientHeight : 1;
+    zoom = Math.max(.2, Math.min(2, zoom * Math.exp(-event.deltaY * units * .0015)));
+    const anchor = { x: (viewport.scrollLeft + x) / oldZoom, y: (viewport.scrollTop + y) / oldZoom };
+    const world = root.querySelector('.mm-world'), plane = root.querySelector('.mm-plane');
+    world.style.transform = `scale(${zoom})`; plane.style.width = `${parseFloat(world.style.width) * zoom}px`; plane.style.height = `${parseFloat(world.style.height) * zoom}px`;
+    viewport.scrollLeft = anchor.x * zoom - x; viewport.scrollTop = anchor.y * zoom - y;
+    root.querySelector('[data-mm-zoom]').textContent = `${Math.round(zoom * 100)}%`;
+  }, { passive: false });
   root.querySelector('.mm-scroll').onkeydown = event => {
     if (!event.target.matches('[data-topic], .mm-scroll')) return;
     const action = { Tab: 'child', Enter: 'sibling', Delete: 'delete', Backspace: 'delete', ' ': 'collapse' }[event.key];
@@ -161,6 +189,7 @@ export function bindMindmaps({ rerender }) {
       } catch (error) { panel.innerHTML = `<p role="alert">${esc(['42P01', 'PGRST205'].includes(error.code) ? 'O banco de mapas ainda precisa ser ativado.' : error.message)}</p>`; } return;
     }
     refresh();
+    if (action === 'fit' || action === 'new') { const view = document.querySelector('.mm-scroll'); view.scrollLeft = 600 * zoom; view.scrollTop = 600 * zoom; }
   });
   root.querySelector('#mm-file').onchange = async event => {
     const file = event.target.files[0]; if (!file || !canLeaveMindmaps()) return;

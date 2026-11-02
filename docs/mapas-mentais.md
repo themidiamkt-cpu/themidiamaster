@@ -25,3 +25,6 @@ Arraste um card com mouse ou toque para posicioná-lo. O zoom é considerado no 
 Interligar cards: selecione origem, ative o botão e clique no destino. As conexões extras são direcionadas, tracejadas e possuem seta. Podem ser removidas no painel do tópico, não modificam a hierarquia e são persistidas em `document.connections`. Não é necessária outra migration: o documento já é JSONB. Mapas antigos sem posições/conexões continuam válidos.
 
 Validação adicional: modelos com IDs independentes, conexões inválidas e repetidas, posições inválidas e ida/volta JSON. Navegador validou usar modelo, interligar, arrastar com zoom 65% e desfazer restaurando a posição anterior.
+
+### Navegação do canvas
+Arrastar o fundo vazio move a área visível, sem alterar posições dos cards. Roda do mouse dá zoom (20% a 200%) ancorado no ponto sob o cursor, sem rolar a página externa. A área contém margem para navegar nos dois sentidos. Verificado no navegador: arraste alterou scroll de (600,600) para (400,500), sem marcar documento como alterado; roda mudou o zoom de 100% para 200%.
