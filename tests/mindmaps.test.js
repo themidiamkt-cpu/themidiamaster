@@ -30,3 +30,17 @@ test('database allows admin only, denies anonymous writes and stale revisions', 
  await db.exec('set role anon'); await assert.rejects(db.query('select * from public.mapas_mentais'));
  } finally { await db.close(); }
 });
+
+test('templates have independent identities, movable positions and valid extra connections', async () => {
+ const { templates, fromTemplate, connectTopics } = await import('../frontend/js/mindmaps/model.js');
+ for (const template of templates) {
+  const a = fromTemplate(template.id), b = fromTemplate(template.id);
+  assert.notEqual(a.nodes[0].id,b.nodes[0].id); validateMap(a);
+  const from = a.nodes[1].id, to = a.nodes.at(-1).id;
+  connectTopics(a,from,to); assert.throws(()=>connectTopics(a,to,from)); assert.throws(()=>connectTopics(a,from,from));
+  a.nodes[1].position={x:680,y:720}; assert.equal(layout(a).positions.find(n=>n.id===from).x,680);
+  const roundtrip=JSON.parse(JSON.stringify(a)); validateMap(roundtrip); assert.equal(roundtrip.connections.length,1);
+  assert.equal(roundtrip.nodes[1].position.y,720);
+  a.nodes[1].position.x=Infinity; assert.throws(()=>validateMap(a));
+ }
+});

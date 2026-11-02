@@ -6,11 +6,11 @@ export async function listMaps() {
 }
 export async function loadMap(id) {
   const { data, error } = await supabase.from('mapas_mentais').select('*').eq('id', id).eq('archived', false).single();
-  if (error) throw error; validateMap({ title: data.title, nodes: data.document.nodes }); return data;
+  if (error) throw error; validateMap({ title: data.title, nodes: data.document.nodes, connections: data.document.connections || [] }); return data;
 }
 export async function saveMap(map, record) {
   validateMap(map);
-  const values = { title: map.title.trim(), document: { nodes: map.nodes }, revision: (record?.revision || 0) + 1 };
+  const values = { title: map.title.trim(), document: { nodes: map.nodes, connections: map.connections || [] }, revision: (record?.revision || 0) + 1 };
   const query = record ? supabase.from('mapas_mentais').update(values).eq('id', record.id).eq('revision', record.revision).eq('archived', false) : supabase.from('mapas_mentais').insert(values);
   const { data, error } = await query.select('id,revision').maybeSingle();
   if (error) throw error;
